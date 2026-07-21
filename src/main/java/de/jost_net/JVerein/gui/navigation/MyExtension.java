@@ -237,6 +237,11 @@ public class MyExtension implements Extension
           new StartViewAction(de.jost_net.JVerein.gui.view.KoerperschaftssteuerView.class),
           "calculator.png"));
 
+      // Umsatzsteuer-Assistent
+      buchfuehrung.addChild(new MyItem(buchfuehrung, "Umsatzsteuer-Assistent",
+          new StartViewAction(de.jost_net.JVerein.gui.view.UmsatzsteuerView.class),
+          "coins.png"));
+
       // Wirtschaftsplan
       if ((Boolean) Einstellungen
           .getEinstellung(Property.WIRTSCHAFTSPLANANZEIGEN))
