@@ -375,6 +375,9 @@ public class KoerperschaftssteuerControl extends AbstractControl
     List<Buchung> unassignedBookings = new ArrayList<>();
     List<Buchung> missingBelegeList = new ArrayList<>();
     List<Buchung> largeDonationsWithoutReceipt = new ArrayList<>();
+    List<Buchung> reverseChargeBookings = new ArrayList<>();
+    double totalReverseChargeBase = 0.0;
+    double totalReverseChargeVat = 0.0;
 
     for (Buchung b : bookings)
     {
@@ -444,6 +447,42 @@ public class KoerperschaftssteuerControl extends AbstractControl
           largeDonationsWithoutReceipt.add(b);
         }
       }
+
+      // Reverse Charge check
+      boolean isReverseCharge = false;
+      if (b.getSteuer() != null && (b.getSteuer().getName().toLowerCase().contains("13b") 
+          || b.getSteuer().getName().toLowerCase().contains("reverse")))
+      {
+        isReverseCharge = true;
+      }
+      else
+      {
+        String nameLower = b.getName() != null ? b.getName().toLowerCase() : "";
+        String zweckLower = b.getZweck() != null ? b.getZweck().toLowerCase() : "";
+        String bartName = bart != null ? bart.getBezeichnung().toLowerCase() : "";
+        if (zweckLower.contains("13b") || zweckLower.contains("reverse charge") 
+            || bartName.contains("13b") || bartName.contains("reverse charge")
+            || nameLower.contains("google") || nameLower.contains("zoom") 
+            || nameLower.contains("microsoft") || nameLower.contains("meta") || nameLower.contains("facebook"))
+        {
+          if (betrag < 0)
+          {
+            isReverseCharge = true;
+          }
+        }
+      }
+      if (isReverseCharge)
+      {
+        reverseChargeBookings.add(b);
+        double base = Math.abs(betrag);
+        double rate = 0.19;
+        if (b.getSteuer() != null && b.getSteuer().getSatz() != null)
+        {
+          rate = b.getSteuer().getSatz() / 100.0;
+        }
+        totalReverseChargeBase += base;
+        totalReverseChargeVat += (base * rate);
+      }
     }
 
     // Write wGB warnings
@@ -487,6 +526,38 @@ public class KoerperschaftssteuerControl extends AbstractControl
     {
       warningsSb.append("[INFO] ").append(unassignedBookings.size()).append(" Buchungen besitzen keine gültige ")
           .append("Buchungsart oder Buchungsklasse. Bitte vor dem DATEV-Export korrigieren.\n");
+    }
+
+    // USt / Reverse Charge section
+    warningsSb.append("\n=========================================================================\n");
+    warningsSb.append("=== UMSATZSTEUER & § 13b REVERSE CHARGE ===\n");
+    warningsSb.append("=========================================================================\n");
+    warningsSb.append("Achtung: Auch als Kleinunternehmer (§ 19 UStG) müssen Sie für bezogene Dienstleistungen\n");
+    warningsSb.append("ausländischer Unternehmen die Umsatzsteuer nach § 13b UStG anmelden und abführen.\n\n");
+    if (reverseChargeBookings.isEmpty())
+    {
+      warningsSb.append("Keine potenziellen Reverse-Charge-Vorfälle im Zeitraum gefunden.\n");
+    }
+    else
+    {
+      warningsSb.append(String.format("Es wurden %d potenzielle Reverse-Charge-Vorfälle identifiziert:\n", reverseChargeBookings.size()));
+      SimpleDateFormat sdf = new SimpleDateFormat("dd.MM.yyyy");
+      for (Buchung b : reverseChargeBookings)
+      {
+        double base = Math.abs(b.getBetrag() != null ? b.getBetrag() : 0.0);
+        double r = 0.19;
+        if (b.getSteuer() != null && b.getSteuer().getSatz() != null)
+        {
+          r = b.getSteuer().getSatz() / 100.0;
+        }
+        double vat = base * r;
+        warningsSb.append(String.format("  - %s | %s: %.2f € (Satz: %.0f%%) -> USt-Zahllast: %.2f €\n",
+            sdf.format(b.getDatum()),
+            b.getName() != null ? b.getName() : (b.getZweck() != null ? b.getZweck() : ""),
+            base, r * 100.0, vat));
+      }
+      warningsSb.append(String.format("\nGesamte Bemessungsgrundlage: %.2f €\n", totalReverseChargeBase));
+      warningsSb.append(String.format("Abzuführende Umsatzsteuer gesamt: %.2f € (Anzumelden in USt-Erklärung Zeile 94 ff.)\n", totalReverseChargeVat));
     }
 
     if (warningsSb.length() < 200)
