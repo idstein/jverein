@@ -232,6 +232,11 @@ public class MyExtension implements Extension
           new StartViewAction(JahresabschlussListeView.class),
           "office-calendar.png"));
 
+      // Körperschaftssteuer
+      buchfuehrung.addChild(new MyItem(buchfuehrung, "Körperschaftssteuer-Assistent",
+          new StartViewAction(de.jost_net.JVerein.gui.view.KoerperschaftssteuerView.class),
+          "calculator.png"));
+
       // Wirtschaftsplan
       if ((Boolean) Einstellungen
           .getEinstellung(Property.WIRTSCHAFTSPLANANZEIGEN))
