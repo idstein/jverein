@@ -1044,7 +1044,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
             "§55 Abs. 1 Nr. 5 AO: Mittel müssen zeitnah (spätestens 2. Folgejahr) verwendet werden."));
       }
 
-      // --- Check 8: Zeitnahe Mittelverwendung (WARNING) ---
+      // --- Check 8: Zeitnahe Mittelverwendung (§55 Abs. 1 Nr. 5 AO) ---
       double gesamtEinnahmen = data.totalRevenueByYear.getOrDefault(y, 0.0);
       if (gesamtEinnahmen > 45000.0)
       {
@@ -1059,12 +1059,47 @@ public class KoerperschaftssteuerControl extends AbstractControl
 
         if (verbleibend > 1000.0)
         {
-          results.add(new PlausibilityResult(CheckLevel.WARNING,
+          // Positive Lookahead: Check if funds were used in year y+1 or y+2 within VZ
+          double usedInFollowupYears = 0.0;
+          for (int fy = y + 1; fy <= Math.min(targetYear, y + 2); fy++)
+          {
+            double fyInc = data.totalRevenueByYear.getOrDefault(fy, 0.0);
+            double fyExp = 0.0;
+            for (Sphere s : Sphere.values())
+            {
+              fyExp += data.expenseBySphereAndYear.get(s).getOrDefault(fy, 0.0);
+            }
+            double fyDeficitOrExtraExp = fyExp - fyInc;
+            if (fyDeficitOrExtraExp > 0)
+            {
+              usedInFollowupYears += fyDeficitOrExtraExp;
+            }
+          }
+
+          double netVerbleibend = verbleibend - usedInFollowupYears;
+          if (netVerbleibend <= 1000.0)
+          {
+            results.add(new PlausibilityResult(CheckLevel.INFO,
+                "Zeitnahe Mittelverwendung", y,
+                String.format("Überschuss %.2f € im Jahr %d wurde in den Folgejahren des VZ (%s%.2f €) satzungsgemäß verwendet.",
+                    verbleibend, y, (usedInFollowupYears > 0 ? String.format("%.2f € verwendet, verbleiben ", usedInFollowupYears) : ""), Math.max(0, netVerbleibend)),
+                "§55 Abs. 1 Nr. 5 AO erlaubt die Verwendung bis zum Ende des 2. Folgejahres. Die Verwendung im VZ ist nachgewiesen."));
+          }
+          else
+          {
+            results.add(new PlausibilityResult(CheckLevel.WARNING,
+                "Zeitnahe Mittelverwendung", y,
+                String.format("Überschuss %.2f €, davon %.2f € gebunden. Verbleibend nach VZ-Folgejahren: %.2f €.",
+                    ueberschuss, gebundenesMittel, netVerbleibend),
+                "Bei Gesamteinnahmen > 45.000 € muss die zeitnahe Mittelverwendung nachgewiesen werden (§55 Abs. 1 Nr. 5 AO). " +
+                "Mittel müssen bis Ende des 2. Folgejahres verwendet werden."));
+          }
+        }
+        else
+        {
+          results.add(new PlausibilityResult(CheckLevel.INFO,
               "Zeitnahe Mittelverwendung", y,
-              String.format("Überschuss %.2f €, davon %.2f € in Rücklagen. Verbleibend: %.2f € nicht gebunden.",
-                  ueberschuss, gebundenesMittel, verbleibend),
-              "Bei Gesamteinnahmen > 45.000 € muss die zeitnahe Mittelverwendung nachgewiesen werden (§55 Abs. 1 Nr. 5 AO). " +
-              "Verbleibende Mittel müssen bis Ende des 2. Folgejahres für den Satzungszweck verwendet werden."));
+              String.format("Kein ungebundener Überschuss im Jahr %d (Verbleibend: %.2f €).", y, Math.max(0, verbleibend)), null));
         }
       }
     }
