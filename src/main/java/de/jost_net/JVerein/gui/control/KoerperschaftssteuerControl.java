@@ -120,7 +120,9 @@ public class KoerperschaftssteuerControl extends AbstractControl
   private SelectInput targetYearInput;
 
   // UI Panels
-  private Text warnungenText;
+  private Table warnungenTable;
+  private Table problemBuchungenTable;
+  private List<Buchung> problemBuchungenList = new ArrayList<>();
   private Table missingBelegeTable;
   private Table ergebnisseTable;
   private Label ergebnisseWarningLabel;
@@ -217,14 +219,65 @@ public class KoerperschaftssteuerControl extends AbstractControl
   {
     parent.setLayout(new GridLayout(1, false));
 
-    Group gr = new Group(parent, SWT.NONE);
-    gr.setText("Prüfungsergebnisse & Frühwarnungen");
-    gr.setLayout(new GridLayout(1, false));
-    gr.setLayoutData(new GridData(GridData.FILL_BOTH));
+    Group gr1 = new Group(parent, SWT.NONE);
+    gr1.setText("Prüfungsergebnisse & Frühwarnungen");
+    gr1.setLayout(new GridLayout(1, false));
+    gr1.setLayoutData(new GridData(GridData.FILL_BOTH));
 
-    warnungenText = new Text(gr, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY | SWT.V_SCROLL);
-    warnungenText.setLayoutData(new GridData(GridData.FILL_BOTH));
-    warnungenText.setText("Audits werden geladen...");
+    warnungenTable = new Table(gr1, SWT.BORDER | SWT.FULL_SELECTION | SWT.V_SCROLL);
+    warnungenTable.setHeaderVisible(true);
+    warnungenTable.setLinesVisible(true);
+    warnungenTable.setLayoutData(new GridData(GridData.FILL_BOTH));
+
+    String[] wCols = {"Status", "Jahr", "Prüfung / Problem", "Details & Empfehlung"};
+    int[] wWidths = {90, 60, 200, 450};
+    for (int i = 0; i < wCols.length; i++)
+    {
+      TableColumn col = new TableColumn(warnungenTable, SWT.LEFT);
+      col.setText(wCols[i]);
+      col.setWidth(wWidths[i]);
+    }
+
+    Group gr2 = new Group(parent, SWT.NONE);
+    gr2.setText("Betroffene Buchungen (Doppelklick zum Öffnen / Bearbeiten)");
+    gr2.setLayout(new GridLayout(1, false));
+    gr2.setLayoutData(new GridData(GridData.FILL_BOTH));
+
+    problemBuchungenTable = new Table(gr2, SWT.BORDER | SWT.FULL_SELECTION | SWT.V_SCROLL);
+    problemBuchungenTable.setHeaderVisible(true);
+    problemBuchungenTable.setLinesVisible(true);
+    problemBuchungenTable.setLayoutData(new GridData(GridData.FILL_BOTH));
+
+    String[] bCols = {"ID", "Datum", "Buchungsart", "Name / Empfänger", "Zweck", "Betrag", "Festgestelltes Problem"};
+    int[] bWidths = {50, 80, 140, 150, 180, 80, 220};
+    for (int i = 0; i < bCols.length; i++)
+    {
+      TableColumn col = new TableColumn(problemBuchungenTable, SWT.LEFT);
+      col.setText(bCols[i]);
+      col.setWidth(bWidths[i]);
+    }
+
+    // Double-click listener on problemBuchungenTable to open Buchung dialog
+    problemBuchungenTable.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter()
+    {
+      @Override
+      public void widgetDefaultSelected(org.eclipse.swt.events.SelectionEvent e)
+      {
+        int idx = problemBuchungenTable.getSelectionIndex();
+        if (idx >= 0 && idx < problemBuchungenList.size())
+        {
+          Buchung b = problemBuchungenList.get(idx);
+          try
+          {
+            new de.jost_net.JVerein.gui.action.BuchungAction(false).handleAction(b);
+          }
+          catch (Exception ex)
+          {
+            Logger.error("Fehler beim Öffnen der Buchung", ex);
+          }
+        }
+      }
+    });
   }
 
   public void paintBelegeTab(Composite parent) throws Exception
@@ -577,39 +630,71 @@ public class KoerperschaftssteuerControl extends AbstractControl
 
     // Compute audits & warnings using helper
     ProcessedData data = processBookings(bookings, startYear, targetYear, docsByReferenz);
-
-    StringBuilder warningsSb = new StringBuilder();
-    String turnusLabel = turnusJaehrlich ? "1-Jahres-Turnus: " + targetYear : "3-Jahres-Turnus: " + startYear + " - " + targetYear;
-    warningsSb.append("Steuerprüfung für den ").append(turnusLabel).append("\n");
-    warningsSb.append("=========================================================================\n\n");
-
-    // Run full Finanzamt Plausibility Check Suite
     List<PlausibilityResult> plausibilityResults = runPlausibilityChecks(data, startYear, targetYear, bookings, docsByReferenz);
 
-    int issueCount = 0;
-    for (PlausibilityResult r : plausibilityResults)
+    // Populate Warnungen Table & Problem Buchungen Table
+    if (warnungenTable != null && !warnungenTable.isDisposed())
     {
-      if (r.level == CheckLevel.CRITICAL || r.level == CheckLevel.WARNING)
+      warnungenTable.removeAll();
+      int issueCount = 0;
+      for (PlausibilityResult r : plausibilityResults)
       {
-        issueCount++;
-        String prefix = r.level == CheckLevel.CRITICAL ? "[FEHLER] " : "[WARNUNG] ";
-        warningsSb.append(prefix).append("Jahr ").append(r.year).append(" | ").append(r.checkName).append(": ").append(r.message).append("\n");
-        if (r.details != null && !r.details.isEmpty())
+        if (r.level == CheckLevel.CRITICAL || r.level == CheckLevel.WARNING)
         {
-          warningsSb.append("   ➜ Details: ").append(r.details).append("\n");
+          issueCount++;
+          TableItem item = new TableItem(warnungenTable, SWT.NONE);
+          item.setText(0, r.level == CheckLevel.CRITICAL ? "✗ FEHLER" : "⚠ WARNUNG");
+          item.setForeground(0, r.level == CheckLevel.CRITICAL ?
+              GUI.getDisplay().getSystemColor(SWT.COLOR_RED) : GUI.getDisplay().getSystemColor(SWT.COLOR_DARK_YELLOW));
+          item.setText(1, String.valueOf(r.year));
+          item.setText(2, r.checkName);
+          String fullDetails = r.message + (r.details != null ? " (" + r.details + ")" : "");
+          item.setText(3, fullDetails);
         }
-        warningsSb.append("\n");
+      }
+
+      if (issueCount == 0)
+      {
+        TableItem item = new TableItem(warnungenTable, SWT.NONE);
+        item.setText(0, "✓ OK");
+        item.setForeground(0, GUI.getDisplay().getSystemColor(SWT.COLOR_GREEN));
+        item.setText(1, startYear + "-" + targetYear);
+        item.setText(2, "Plausibilitätsprüfung");
+        item.setText(3, "Keine Warnungen oder schwerwiegenden Plausibilitätsfehler gefunden. Alles in Ordnung!");
       }
     }
 
-    if (issueCount == 0)
+    if (problemBuchungenTable != null && !problemBuchungenTable.isDisposed())
     {
-      warningsSb.append("[OK] Keine Warnungen oder schwerwiegenden Plausibilitätsfehler gefunden. Alles in Ordnung!\n");
-    }
+      problemBuchungenTable.removeAll();
+      problemBuchungenList.clear();
 
-    if (warnungenText != null && !warnungenText.isDisposed())
-    {
-      warnungenText.setText(warningsSb.toString());
+      // Collect unassigned bookings and bookings without account or category
+      for (Buchung b : bookings)
+      {
+        String problemDesc = null;
+        if (b.getBuchungsart() == null || b.getBuchungsklasse() == null)
+        {
+          problemDesc = "Fehlende Sphären- / Buchungsartzuordnung";
+        }
+        else if (b.getKonto() == null)
+        {
+          problemDesc = "Fehlendes Finanazkonto";
+        }
+
+        if (problemDesc != null)
+        {
+          problemBuchungenList.add(b);
+          TableItem item = new TableItem(problemBuchungenTable, SWT.NONE);
+          item.setText(0, String.valueOf(b.getID()));
+          item.setText(1, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
+          item.setText(2, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Ohne Buchungsart");
+          item.setText(3, b.getName() != null ? b.getName() : "");
+          item.setText(4, b.getZweck() != null ? b.getZweck() : "");
+          item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
+          item.setText(6, problemDesc);
+        }
+      }
     }
 
     // Populate missing receipts table
