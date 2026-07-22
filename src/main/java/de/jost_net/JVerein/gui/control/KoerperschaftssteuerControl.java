@@ -1026,6 +1026,93 @@ public class KoerperschaftssteuerControl extends AbstractControl
                 proofedTotal, totalBookings, withAttachedBeleg, withKontoauszugProof, exemptBeleg), null));
       }
 
+      // --- Check 4b: Beleginhalt-Plausibilität (PDF Text & Betrags-Prüfung via PDFBox) ---
+      int scannedDocs = 0;
+      int verifiedDocs = 0;
+      int amountMismatchDocs = 0;
+      List<String> mismatchDetails = new ArrayList<>();
+
+      for (Buchung b : allBookings)
+      {
+        Calendar c = Calendar.getInstance();
+        c.setTime(b.getDatum());
+        if (c.get(Calendar.YEAR) != y) continue;
+
+        Long bid = Long.valueOf(b.getID());
+        List<BuchungDokument> docs = (docsByReferenz != null) ? docsByReferenz.get(bid) : null;
+        if (docs == null || docs.isEmpty()) continue;
+
+        double expectedAmount = Math.abs(b.getBetrag() != null ? b.getBetrag() : 0.0);
+        String amountStrComma = String.format("%.2f", expectedAmount).replace(".", ",");
+        String amountStrDot = String.format("%.2f", expectedAmount).replace(",", ".");
+
+        for (BuchungDokument doc : docs)
+        {
+          File binFile = new File(de.willuhn.jameica.system.Application.getPlatform().getWorkdir(),
+              "jameica.messaging/archive/buchungen/" + b.getID() + "/" + doc.getUUID());
+          if (!binFile.exists() || binFile.length() == 0) continue;
+
+          try (org.apache.pdfbox.pdmodel.PDDocument pdDoc = org.apache.pdfbox.Loader.loadPDF(binFile))
+          {
+            org.apache.pdfbox.text.PDFTextStripper stripper = new org.apache.pdfbox.text.PDFTextStripper();
+            String extractedText = stripper.getText(pdDoc);
+
+            if (extractedText == null || extractedText.trim().isEmpty())
+            {
+              scannedDocs++; // Image-based PDF (no text layer)
+            }
+            else
+            {
+              // Text layer present: Check if expected amount appears in text
+              boolean amountFound = extractedText.contains(amountStrComma) || extractedText.contains(amountStrDot);
+              if (!amountFound && expectedAmount >= 1.0)
+              {
+                // Try integer amount if no decimals (e.g. "1000 €")
+                if (expectedAmount == Math.floor(expectedAmount))
+                {
+                  String intStr = String.format("%.0f", expectedAmount);
+                  amountFound = extractedText.contains(intStr);
+                }
+              }
+
+              if (amountFound)
+              {
+                verifiedDocs++;
+              }
+              else
+              {
+                amountMismatchDocs++;
+                if (mismatchDetails.size() < 5)
+                {
+                  mismatchDetails.add(String.format("Buchung #%s (%.2f €): Betrag im PDF-Text nicht gefunden",
+                      b.getID(), expectedAmount));
+                }
+              }
+            }
+          }
+          catch (Exception e)
+          {
+            // Non-PDF or unparseable PDF file, skip
+          }
+        }
+      }
+
+      if (amountMismatchDocs > 0)
+      {
+        results.add(new PlausibilityResult(CheckLevel.WARNING,
+            "Beleginhalt-Abweichung", y,
+            String.format("%d Beleg(e) inhaltlich verifiziert, %d Beleg(e) mit Betragsabweichung im PDF-Text.",
+                verifiedDocs, amountMismatchDocs),
+            "Geprüfte Abweichungen: " + String.join("; ", mismatchDetails)));
+      }
+      else if (verifiedDocs > 0)
+      {
+        results.add(new PlausibilityResult(CheckLevel.INFO,
+            "Beleginhalt-Plausibilität", y,
+            String.format("100%% der lesbaren PDF-Belege (%d Stk.) stimmen inhaltlich mit dem Buchungsbetrag überein (%d Scans ohne Textschicht).",
+                verifiedDocs, scannedDocs), null));
+      }
+
       // --- Check 5: Buchungen ohne Konto oder Buchungsart (WARNING) ---
       int ohneKonto = 0;
       int ohneBuchungsart = 0;
