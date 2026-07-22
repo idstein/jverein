@@ -812,6 +812,434 @@ public class KoerperschaftssteuerControl extends AbstractControl
     List<Buchung> largeDonationsWithoutReceipt = new ArrayList<>();
   }
 
+  // --- Plausibility Check Infrastructure ---
+
+  public enum CheckLevel
+  {
+    CRITICAL("FEHLER"),
+    WARNING("WARNUNG"),
+    INFO("INFO");
+
+    private final String label;
+    CheckLevel(String label) { this.label = label; }
+    public String getLabel() { return label; }
+  }
+
+  private static class PlausibilityResult
+  {
+    CheckLevel level;
+    String checkName;
+    int year;
+    String message;
+    String details;
+
+    PlausibilityResult(CheckLevel level, String checkName, int year, String message, String details)
+    {
+      this.level = level;
+      this.checkName = checkName;
+      this.year = year;
+      this.message = message;
+      this.details = details;
+    }
+  }
+
+  private List<PlausibilityResult> runPlausibilityChecks(
+      ProcessedData data, int startYear, int targetYear,
+      List<Buchung> allBookings, Map<Long, List<BuchungDokument>> docsByReferenz) throws Exception
+  {
+    List<PlausibilityResult> results = new ArrayList<>();
+
+    for (int y = startYear; y <= targetYear; y++)
+    {
+      // --- Check 1: Unzugeordnete Buchungen (CRITICAL) ---
+      double unassIncome = data.incomeBySphereAndYear.get(Sphere.UNASSIGNED).getOrDefault(y, 0.0);
+      double unassExpense = data.expenseBySphereAndYear.get(Sphere.UNASSIGNED).getOrDefault(y, 0.0);
+      if (Math.abs(unassIncome) > 0.01 || Math.abs(unassExpense) > 0.01)
+      {
+        int count = 0;
+        for (Buchung b : data.unassignedBookings)
+        {
+          Calendar c = Calendar.getInstance();
+          c.setTime(b.getDatum());
+          if (c.get(Calendar.YEAR) == y) count++;
+        }
+        results.add(new PlausibilityResult(CheckLevel.CRITICAL,
+            "Unzugeordnete Buchungen", y,
+            String.format("%d Buchung(en) ohne Sphärenzuordnung (Einnahmen: %.2f €, Ausgaben: %.2f €)", count, unassIncome, unassExpense),
+            "Alle Buchungen müssen einem der 4 Bereiche (Ideell, VV, ZB, WGB) zugeordnet sein. Das Finanzamt verlangt eine lückenlose Zuordnung."));
+      }
+      else
+      {
+        results.add(new PlausibilityResult(CheckLevel.INFO,
+            "Unzugeordnete Buchungen", y,
+            "Alle Buchungen sind einer Sphäre zugeordnet.", null));
+      }
+
+      // --- Check 2: WGB-Freigrenze §64 Abs. 3 AO (CRITICAL) ---
+      double wgbIncome = data.incomeBySphereAndYear.get(Sphere.WGB).getOrDefault(y, 0.0);
+      double wgbExpense = data.expenseBySphereAndYear.get(Sphere.WGB).getOrDefault(y, 0.0);
+      double freigrenze = (y >= 2026) ? 50000.0 : 45000.0;
+
+      if (wgbIncome > freigrenze)
+      {
+        double wgbGewinn = wgbIncome - wgbExpense;
+        double kstPflichtig = Math.max(0.0, wgbGewinn - 5000.0);
+        results.add(new PlausibilityResult(CheckLevel.CRITICAL,
+            "WGB-Freigrenze überschritten", y,
+            String.format("WGB-Einnahmen %.2f € überschreiten die Freigrenze von %.0f € (§64 Abs. 3 AO)", wgbIncome, freigrenze),
+            String.format("Gewinn WGB: %.2f €, abzgl. Freibetrag §24 KStG (5.000 €): %.2f € KSt-pflichtig. " +
+                "Es wird KSt 1 mit Anlage GK und ZVE benötigt.", wgbGewinn, kstPflichtig)));
+      }
+      else if (wgbIncome > freigrenze * 0.9 && wgbIncome > 0)
+      {
+        results.add(new PlausibilityResult(CheckLevel.WARNING,
+            "WGB nahe an Freigrenze", y,
+            String.format("WGB-Einnahmen %.2f € erreichen %.0f%% der Freigrenze von %.0f €",
+                wgbIncome, (wgbIncome / freigrenze * 100), freigrenze),
+            "Bei Überschreitung der Freigrenze werden ALLE WGB-Einnahmen steuerpflichtig (Freigrenze, nicht Freibetrag!)."));
+      }
+      else
+      {
+        results.add(new PlausibilityResult(CheckLevel.INFO,
+            "WGB-Freigrenze", y,
+            String.format("WGB-Einnahmen %.2f € liegen unter der Freigrenze von %.0f €.", wgbIncome, freigrenze), null));
+      }
+
+      // --- Check 3: Freie Rücklage §62 Abs. 1 Nr. 3 AO (CRITICAL) ---
+      double vvIncome = data.incomeBySphereAndYear.get(Sphere.VERMOEGENSVERWALTUNG).getOrDefault(y, 0.0);
+      double vvExpense = data.expenseBySphereAndYear.get(Sphere.VERMOEGENSVERWALTUNG).getOrDefault(y, 0.0);
+      double vvUeberschuss = Math.max(0.0, vvIncome - vvExpense);
+      double maxAusVV = vvUeberschuss / 3.0;
+
+      double ideellIncome = data.incomeBySphereAndYear.get(Sphere.IDEELL).getOrDefault(y, 0.0);
+      double zbIncome = data.incomeBySphereAndYear.get(Sphere.ZWECKBETRIEB).getOrDefault(y, 0.0);
+      double sonstigeMittel = ideellIncome + zbIncome + wgbIncome;
+      double maxAusSonstige = sonstigeMittel * 0.10;
+
+      double maxFreieRuecklage = maxAusVV + maxAusSonstige;
+
+      // Check actual Rücklage bookings (accounts 77790, 77810 = Zuführung freie Rücklage)
+      double tatsZufuehrungFrei = 0.0;
+      double tatsZufuehrungGebunden = 0.0;
+      double tatsEntnahme = 0.0;
+      for (Buchung b : allBookings)
+      {
+        Calendar c = Calendar.getInstance();
+        c.setTime(b.getDatum());
+        if (c.get(Calendar.YEAR) != y) continue;
+        Buchungsart ba = b.getBuchungsart();
+        if (ba == null) continue;
+        String num = ba.getNummer();
+        if (num == null) continue;
+        double betrag = Math.abs(b.getBetrag() != null ? b.getBetrag() : 0.0);
+        if (num.startsWith("77810") || num.startsWith("7781"))
+          tatsZufuehrungFrei += betrag;
+        else if (num.startsWith("77790") || num.startsWith("7779"))
+          tatsZufuehrungGebunden += betrag;
+        else if (num.startsWith("77510") || num.startsWith("7751") || num.startsWith("77490") || num.startsWith("7749"))
+          tatsEntnahme += betrag;
+      }
+
+      if (tatsZufuehrungFrei > maxFreieRuecklage + 0.01 && maxFreieRuecklage > 0)
+      {
+        results.add(new PlausibilityResult(CheckLevel.CRITICAL,
+            "Freie Rücklage über Maximum", y,
+            String.format("Zuführung freie Rücklage %.2f € übersteigt das Maximum von %.2f € (§62 Abs. 1 Nr. 3 AO)",
+                tatsZufuehrungFrei, maxFreieRuecklage),
+            String.format("Max. aus VV: 1/3 von %.2f € = %.2f €. Max. aus sonstigen Mitteln: 10%% von %.2f € = %.2f €. " +
+                "Gesamt max. zulässig: %.2f €. Ungenutztes Potenzial kann in den 2 Folgejahren nachgeholt werden.",
+                vvUeberschuss, maxAusVV, sonstigeMittel, maxAusSonstige, maxFreieRuecklage)));
+      }
+      else
+      {
+        results.add(new PlausibilityResult(CheckLevel.INFO,
+            "Freie Rücklage", y,
+            String.format("Zuführung %.2f € (max. zulässig: %.2f €). Gebundene Rücklage: %.2f €, Entnahmen: %.2f €.",
+                tatsZufuehrungFrei, maxFreieRuecklage, tatsZufuehrungGebunden, tatsEntnahme), null));
+      }
+
+      // --- Check 4: Belege-Abdeckung (WARNING) ---
+      int totalBookings = 0;
+      int withBeleg = 0;
+      int withoutBeleg = 0;
+      for (Buchung b : allBookings)
+      {
+        Calendar c = Calendar.getInstance();
+        c.setTime(b.getDatum());
+        if (c.get(Calendar.YEAR) != y) continue;
+        Buchungsart ba = b.getBuchungsart();
+        // Skip Umbuchungen and bank fees
+        if (ba != null && ba.getArt() == 2) continue;
+        totalBookings++;
+        Long bid = Long.valueOf(b.getID());
+        if (docsByReferenz != null && docsByReferenz.containsKey(bid))
+          withBeleg++;
+        else
+          withoutBeleg++;
+      }
+      double belegPercent = totalBookings > 0 ? (withBeleg * 100.0 / totalBookings) : 100.0;
+      if (belegPercent < 50.0)
+      {
+        results.add(new PlausibilityResult(CheckLevel.WARNING,
+            "Belegabdeckung niedrig", y,
+            String.format("Nur %.0f%% der Buchungen (%d/%d) haben digitale Belege.", belegPercent, withBeleg, totalBookings),
+            "Das Finanzamt kann Belege zu allen Geschäftsvorfällen anfordern (GoBD). Empfehlung: Fehlende Belege nachpflegen."));
+      }
+      else
+      {
+        results.add(new PlausibilityResult(CheckLevel.INFO,
+            "Belegabdeckung", y,
+            String.format("%.0f%% der Buchungen (%d/%d) haben digitale Belege. %d ohne Beleg.",
+                belegPercent, withBeleg, totalBookings, withoutBeleg), null));
+      }
+
+      // --- Check 5: Buchungen ohne Konto oder Buchungsart (WARNING) ---
+      int ohneKonto = 0;
+      int ohneBuchungsart = 0;
+      for (Buchung b : allBookings)
+      {
+        Calendar c = Calendar.getInstance();
+        c.setTime(b.getDatum());
+        if (c.get(Calendar.YEAR) != y) continue;
+        if (b.getKonto() == null) ohneKonto++;
+        if (b.getBuchungsart() == null) ohneBuchungsart++;
+      }
+      if (ohneKonto > 0 || ohneBuchungsart > 0)
+      {
+        results.add(new PlausibilityResult(CheckLevel.WARNING,
+            "Unvollständige Kontierung", y,
+            String.format("%d Buchung(en) ohne Gegenkonto, %d ohne Buchungsart.", ohneKonto, ohneBuchungsart),
+            "DATEV erwartet für jede Buchung ein Konto und Gegenkonto. Unvollständige Buchungen verursachen Import-Fehler."));
+      }
+      else
+      {
+        results.add(new PlausibilityResult(CheckLevel.INFO,
+            "Kontierung vollständig", y,
+            "Alle Buchungen haben Konto und Buchungsart.", null));
+      }
+
+      // --- Check 6: Sphärenverteilung (INFO) ---
+      StringBuilder sphereInfo = new StringBuilder();
+      for (Sphere s : Sphere.values())
+      {
+        if (s == Sphere.UNASSIGNED) continue;
+        double inc = data.incomeBySphereAndYear.get(s).getOrDefault(y, 0.0);
+        double exp = data.expenseBySphereAndYear.get(s).getOrDefault(y, 0.0);
+        if (Math.abs(inc) > 0.01 || Math.abs(exp) > 0.01)
+        {
+          sphereInfo.append(String.format("%s: Einnahmen %.2f €, Ausgaben %.2f €, Ergebnis %.2f €. ",
+              s.getLabel(), inc, exp, inc - exp));
+        }
+      }
+      results.add(new PlausibilityResult(CheckLevel.INFO,
+          "Sphärenverteilung", y, sphereInfo.toString(), null));
+
+      // --- Check 7: WGB-Gewinn Verwendung (INFO) ---
+      double wgbGewinn = wgbIncome - wgbExpense;
+      if (wgbGewinn > 0.01)
+      {
+        results.add(new PlausibilityResult(CheckLevel.INFO,
+            "WGB-Gewinn", y,
+            String.format("WGB-Gewinn %.2f € muss zeitnah für satzungsgemäße Zwecke verwendet werden.", wgbGewinn),
+            "§55 Abs. 1 Nr. 5 AO: Mittel müssen zeitnah (spätestens 2. Folgejahr) verwendet werden."));
+      }
+
+      // --- Check 8: Zeitnahe Mittelverwendung (WARNING) ---
+      double gesamtEinnahmen = data.totalRevenueByYear.getOrDefault(y, 0.0);
+      if (gesamtEinnahmen > 45000.0)
+      {
+        double gesamtAusgaben = 0.0;
+        for (Sphere s : Sphere.values())
+        {
+          gesamtAusgaben += data.expenseBySphereAndYear.get(s).getOrDefault(y, 0.0);
+        }
+        double ueberschuss = gesamtEinnahmen - gesamtAusgaben;
+        double gebundenesMittel = tatsZufuehrungFrei + tatsZufuehrungGebunden;
+        double verbleibend = ueberschuss - gebundenesMittel;
+
+        if (verbleibend > 1000.0)
+        {
+          results.add(new PlausibilityResult(CheckLevel.WARNING,
+              "Zeitnahe Mittelverwendung", y,
+              String.format("Überschuss %.2f €, davon %.2f € in Rücklagen. Verbleibend: %.2f € nicht gebunden.",
+                  ueberschuss, gebundenesMittel, verbleibend),
+              "Bei Gesamteinnahmen > 45.000 € muss die zeitnahe Mittelverwendung nachgewiesen werden (§55 Abs. 1 Nr. 5 AO). " +
+              "Verbleibende Mittel müssen bis Ende des 2. Folgejahres für den Satzungszweck verwendet werden."));
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private void writePruefprotokollPDF(File file, List<PlausibilityResult> results,
+      int startYear, int targetYear, ProcessedData data) throws Exception
+  {
+    Document doc = new Document(com.itextpdf.text.PageSize.A4, 36, 36, 50, 36);
+    PdfWriter.getInstance(doc, new FileOutputStream(file));
+    doc.open();
+
+    Font titleFont = new Font(Font.FontFamily.HELVETICA, 18, Font.BOLD, BaseColor.DARK_GRAY);
+    Font subtitleFont = new Font(Font.FontFamily.HELVETICA, 10, Font.ITALIC, BaseColor.GRAY);
+    Font sectionFont = new Font(Font.FontFamily.HELVETICA, 14, Font.BOLD, new BaseColor(0, 102, 153));
+    Font headerFont = new Font(Font.FontFamily.HELVETICA, 9, Font.BOLD, BaseColor.WHITE);
+    Font cellFont = new Font(Font.FontFamily.HELVETICA, 8, Font.NORMAL, BaseColor.BLACK);
+    Font okFont = new Font(Font.FontFamily.HELVETICA, 8, Font.BOLD, new BaseColor(0, 128, 0));
+    Font warnFont = new Font(Font.FontFamily.HELVETICA, 8, Font.BOLD, new BaseColor(204, 102, 0));
+    Font errorFont = new Font(Font.FontFamily.HELVETICA, 8, Font.BOLD, new BaseColor(204, 0, 0));
+
+    // Title
+    Paragraph title = new Paragraph("Prüfprotokoll DATEV-Exportpaket", titleFont);
+    title.setSpacingAfter(5);
+    doc.add(title);
+    Paragraph sub = new Paragraph(
+        String.format("Veranlagungszeitraum %d–%d | Erstellt am %s",
+            startYear, targetYear, new SimpleDateFormat("dd.MM.yyyy HH:mm").format(new Date())), subtitleFont);
+    sub.setSpacingAfter(20);
+    doc.add(sub);
+
+    // Summary counts
+    int criticalCount = 0, warningCount = 0, infoCount = 0;
+    for (PlausibilityResult r : results)
+    {
+      switch (r.level)
+      {
+        case CRITICAL: criticalCount++; break;
+        case WARNING: warningCount++; break;
+        case INFO: infoCount++; break;
+      }
+    }
+
+    Paragraph summary = new Paragraph(String.format(
+        "Zusammenfassung: %d Fehler, %d Warnungen, %d Hinweise",
+        criticalCount, warningCount, infoCount),
+        criticalCount > 0 ? errorFont : (warningCount > 0 ? warnFont : okFont));
+    summary.setSpacingAfter(15);
+    doc.add(summary);
+
+    // Section: Sphärenübersicht
+    Paragraph sphereTitle = new Paragraph("1. Sphärenübersicht (Vier-Bereiche-System)", sectionFont);
+    sphereTitle.setSpacingAfter(8);
+    doc.add(sphereTitle);
+
+    int yearCount = targetYear - startYear + 1;
+    PdfPTable sphereTable = new PdfPTable(1 + yearCount * 3);
+    sphereTable.setWidthPercentage(100);
+    float[] widths = new float[1 + yearCount * 3];
+    widths[0] = 3f;
+    for (int i = 1; i < widths.length; i++) widths[i] = 1.5f;
+    sphereTable.setWidths(widths);
+
+    PdfPCell h = new PdfPCell(new Phrase("Bereich", headerFont));
+    h.setBackgroundColor(new BaseColor(0, 102, 153));
+    h.setHorizontalAlignment(Element.ALIGN_CENTER);
+    h.setPadding(4);
+    sphereTable.addCell(h);
+    for (int y = startYear; y <= targetYear; y++)
+    {
+      for (String col : new String[]{"Einnahmen " + y, "Ausgaben " + y, "Ergebnis " + y})
+      {
+        h = new PdfPCell(new Phrase(col, headerFont));
+        h.setBackgroundColor(new BaseColor(0, 102, 153));
+        h.setHorizontalAlignment(Element.ALIGN_CENTER);
+        h.setPadding(4);
+        sphereTable.addCell(h);
+      }
+    }
+    for (Sphere s : Sphere.values())
+    {
+      PdfPCell nameCell = new PdfPCell(new Phrase(s.getLabel(), cellFont));
+      nameCell.setPadding(3);
+      if (s == Sphere.UNASSIGNED)
+        nameCell.setBackgroundColor(new BaseColor(255, 230, 230));
+      sphereTable.addCell(nameCell);
+      for (int y = startYear; y <= targetYear; y++)
+      {
+        double inc = data.incomeBySphereAndYear.get(s).getOrDefault(y, 0.0);
+        double exp = data.expenseBySphereAndYear.get(s).getOrDefault(y, 0.0);
+        double net = inc - exp;
+        for (double val : new double[]{inc, exp, net})
+        {
+          PdfPCell vc = new PdfPCell(new Phrase(String.format("%.2f", val), cellFont));
+          vc.setHorizontalAlignment(Element.ALIGN_RIGHT);
+          vc.setPadding(3);
+          if (s == Sphere.UNASSIGNED && Math.abs(val) > 0.01)
+            vc.setBackgroundColor(new BaseColor(255, 200, 200));
+          sphereTable.addCell(vc);
+        }
+      }
+    }
+    doc.add(sphereTable);
+    doc.add(new Paragraph(" "));
+
+    // Section: Checkliste
+    Paragraph checkTitle = new Paragraph("2. Plausibilitätsprüfungen", sectionFont);
+    checkTitle.setSpacingAfter(8);
+    doc.add(checkTitle);
+
+    PdfPTable checkTable = new PdfPTable(4);
+    checkTable.setWidthPercentage(100);
+    checkTable.setWidths(new float[]{1f, 0.6f, 3f, 3f});
+
+    for (String colName : new String[]{"Status", "Jahr", "Prüfung", "Details"})
+    {
+      h = new PdfPCell(new Phrase(colName, headerFont));
+      h.setBackgroundColor(new BaseColor(0, 102, 153));
+      h.setPadding(4);
+      checkTable.addCell(h);
+    }
+
+    for (PlausibilityResult r : results)
+    {
+      Font statusFont = r.level == CheckLevel.CRITICAL ? errorFont :
+          (r.level == CheckLevel.WARNING ? warnFont : okFont);
+      String statusSymbol = r.level == CheckLevel.CRITICAL ? "✗ FEHLER" :
+          (r.level == CheckLevel.WARNING ? "⚠ WARNUNG" : "✓ OK");
+
+      PdfPCell statusCell = new PdfPCell(new Phrase(statusSymbol, statusFont));
+      statusCell.setPadding(3);
+      if (r.level == CheckLevel.CRITICAL) statusCell.setBackgroundColor(new BaseColor(255, 230, 230));
+      else if (r.level == CheckLevel.WARNING) statusCell.setBackgroundColor(new BaseColor(255, 243, 224));
+      checkTable.addCell(statusCell);
+
+      PdfPCell yearCell = new PdfPCell(new Phrase(String.valueOf(r.year), cellFont));
+      yearCell.setPadding(3);
+      yearCell.setHorizontalAlignment(Element.ALIGN_CENTER);
+      checkTable.addCell(yearCell);
+
+      PdfPCell msgCell = new PdfPCell(new Phrase(r.checkName + ": " + r.message, cellFont));
+      msgCell.setPadding(3);
+      checkTable.addCell(msgCell);
+
+      PdfPCell detailCell = new PdfPCell(new Phrase(r.details != null ? r.details : "", cellFont));
+      detailCell.setPadding(3);
+      checkTable.addCell(detailCell);
+    }
+    doc.add(checkTable);
+    doc.add(new Paragraph(" "));
+
+    // Section: Gesetzliche Grundlagen
+    Paragraph lawTitle = new Paragraph("3. Gesetzliche Grundlagen", sectionFont);
+    lawTitle.setSpacingAfter(8);
+    doc.add(lawTitle);
+
+    Font lawFont = new Font(Font.FontFamily.HELVETICA, 8, Font.NORMAL, BaseColor.DARK_GRAY);
+    String[] laws = {
+        "§5 Abs. 1 Nr. 9 KStG — Steuerbefreiung für gemeinnützige Körperschaften",
+        "§24 KStG — Freibetrag 5.000 € auf WGB-Gewinn",
+        "§55 Abs. 1 Nr. 5 AO — Zeitnahe Mittelverwendung (2 Folgejahre)",
+        "§62 Abs. 1 Nr. 1 AO — Zweckgebundene und Betriebsmittelrücklage",
+        "§62 Abs. 1 Nr. 3 AO — Freie Rücklage (max. 1/3 VV-Überschuss + 10% sonstige Mittel)",
+        "§64 Abs. 3 AO — Freigrenze WGB (50.000 € ab 2026, davor 45.000 €)",
+    };
+    for (String law : laws)
+    {
+      doc.add(new Paragraph("• " + law, lawFont));
+    }
+
+    doc.close();
+  }
+
   private ProcessedData processBookings(List<Buchung> bookings, int startYear, int targetYear, Map<Long, List<BuchungDokument>> docsByReferenz) throws Exception
   {
     ProcessedData data = new ProcessedData();
@@ -1302,6 +1730,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
         zipFiles.add(y + " Vermo\u0308gensaufstellung.pdf");
         zipFiles.add(y + " Ueberschussermittlung Vermoegensaufstellung.pdf");
         zipFiles.add(y + " AVEU\u0308R.pdf");
+        zipFiles.add(y + " Pruefprotokoll.pdf");
         if (xlsxSrc != null)
         {
           zipFiles.add(y + " Ru\u0308cklagenberechnung.xlsx");
@@ -1618,6 +2047,11 @@ public class KoerperschaftssteuerControl extends AbstractControl
         // Report 6: AVEU\u0308R
         File file6 = new File(dir, y + " AVEU\u0308R.pdf");
         writeAveuerPDF(file6, y, y, incomeBySphereAndYear, expenseBySphereAndYear);
+
+        // Report 7: Pruefprotokoll (Plausibilitätsprüfung)
+        File file7 = new File(dir, y + " Pruefprotokoll.pdf");
+        List<PlausibilityResult> pResults = runPlausibilityChecks(data, y, y, bookings, null);
+        writePruefprotokollPDF(file7, pResults, y, y, data);
       }
     }
   }
