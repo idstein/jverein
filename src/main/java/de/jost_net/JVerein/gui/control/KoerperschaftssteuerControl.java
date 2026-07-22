@@ -958,39 +958,72 @@ public class KoerperschaftssteuerControl extends AbstractControl
                 tatsZufuehrungFrei, maxFreieRuecklage, tatsZufuehrungGebunden, tatsEntnahme), null));
       }
 
-      // --- Check 4: Belege-Abdeckung (WARNING) ---
+      // --- Check 4: Belege-Abdeckung (§146 AO / GoBD) ---
       int totalBookings = 0;
-      int withBeleg = 0;
-      int withoutBeleg = 0;
+      int withAttachedBeleg = 0;
+      int withKontoauszugProof = 0;
+      int exemptBeleg = 0;
+      int missingBeleg = 0;
+
       for (Buchung b : allBookings)
       {
         Calendar c = Calendar.getInstance();
         c.setTime(b.getDatum());
         if (c.get(Calendar.YEAR) != y) continue;
+
         Buchungsart ba = b.getBuchungsart();
-        // Skip Umbuchungen and bank fees
+        // Skip internal transfers / Umbuchungen
         if (ba != null && ba.getArt() == 2) continue;
+
         totalBookings++;
         Long bid = Long.valueOf(b.getID());
-        if (docsByReferenz != null && docsByReferenz.containsKey(bid))
-          withBeleg++;
+        boolean hasAttachment = (docsByReferenz != null && docsByReferenz.containsKey(bid));
+        boolean hasAuszugsnummer = (b.getAuszugsnummer() != null && b.getAuszugsnummer() > 0)
+                                || (b.getBlattnummer() != null && b.getBlattnummer() > 0);
+
+        String num = (ba != null && ba.getNummer() != null) ? ba.getNummer() : "";
+        double betrag = Math.abs(b.getBetrag() != null ? b.getBetrag() : 0.0);
+
+        if (hasAttachment)
+        {
+          withAttachedBeleg++;
+        }
+        else if (num.startsWith("400") || num.startsWith("401") || num.startsWith("1372") || (num.startsWith("404") && betrag <= 300.0))
+        {
+          // Mitgliedsbeiträge, Aufnahmegebühren, Geldtransit, Spenden <= 300 €:
+          // Kontoauszug / SEPA-Lastschrift ist gesetzlich als Beleg vollkommen ausreichend (§50 EStDV)
+          exemptBeleg++;
+        }
+        else if (hasAuszugsnummer || num.startsWith("6855"))
+        {
+          // Durch Kontoauszugsnummer / Bankauszug nachgewiesen (z.B. Bankgebühren)
+          withKontoauszugProof++;
+        }
         else
-          withoutBeleg++;
+        {
+          missingBeleg++;
+        }
       }
-      double belegPercent = totalBookings > 0 ? (withBeleg * 100.0 / totalBookings) : 100.0;
-      if (belegPercent < 50.0)
+
+      int proofedTotal = withAttachedBeleg + withKontoauszugProof + exemptBeleg;
+      double proofedPercent = totalBookings > 0 ? (proofedTotal * 100.0 / totalBookings) : 100.0;
+
+      if (missingBeleg > 0)
       {
-        results.add(new PlausibilityResult(CheckLevel.WARNING,
-            "Belegabdeckung niedrig", y,
-            String.format("Nur %.0f%% der Buchungen (%d/%d) haben digitale Belege.", belegPercent, withBeleg, totalBookings),
-            "Das Finanzamt kann Belege zu allen Geschäftsvorfällen anfordern (GoBD). Empfehlung: Fehlende Belege nachpflegen."));
+        results.add(new PlausibilityResult(
+            proofedPercent >= 80.0 ? CheckLevel.INFO : CheckLevel.WARNING,
+            "Belegabdeckung (GoBD)", y,
+            String.format("%.0f%% ordnungsgemäß belegt (%d/%d): %d mit Belegdatei, %d per Kontoauszug, %d gesetzlich beitragsbefreit, %d fehlend.",
+                proofedPercent, proofedTotal, totalBookings, withAttachedBeleg, withKontoauszugProof, exemptBeleg, missingBeleg),
+            "Für Mitgliedsbeiträge, Geldtransit & Bankgebühren ist der Kontoauszug/SEPA-Nachweis gesetzlich ausreichend. " +
+            "Für Fremdleistungen und Wareneinkäufe ohne Beleg wird eine digitale Belegdatei empfohlen."));
       }
       else
       {
         results.add(new PlausibilityResult(CheckLevel.INFO,
-            "Belegabdeckung", y,
-            String.format("%.0f%% der Buchungen (%d/%d) haben digitale Belege. %d ohne Beleg.",
-                belegPercent, withBeleg, totalBookings, withoutBeleg), null));
+            "Belegabdeckung (GoBD)", y,
+            String.format("100%% ordnungsgemäß belegt (%d/%d): %d mit Belegdatei, %d per Kontoauszug, %d gesetzlich beitragsbefreit.",
+                proofedTotal, totalBookings, withAttachedBeleg, withKontoauszugProof, exemptBeleg), null));
       }
 
       // --- Check 5: Buchungen ohne Konto oder Buchungsart (WARNING) ---
@@ -1683,7 +1716,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
 
     try
     {
-      generateSteuerPDFs(targetYear, pdfDirs);
+      generateSteuerPDFs(targetYear, pdfDirs, docsByReferenz);
       updateExportLogs("Steuer-PDF-Berichte erfolgreich generiert.");
     }
     catch (Exception e)
@@ -1756,6 +1789,53 @@ public class KoerperschaftssteuerControl extends AbstractControl
       xmlContent.append("    <description>JVerein Belegtransfer Export</description>\n");
       xmlContent.append("  </header>\n");
       xmlContent.append("  <content>\n");
+
+      // Pack Bank Statements (Kontoauszüge) from OneDrive folder into ZIP
+      String kasseBase = userHome + "/Library/CloudStorage/OneDrive-SharedLibraries-BeerfurtherSchwimmbade.V/Vorstand - Documents/Kasse";
+      for (int y = targetYear - 2; y <= targetYear; y++)
+      {
+        File auszDir = new File(kasseBase + "/" + y + "/Kontoauszu\u0308ge");
+        if (!auszDir.exists())
+        {
+          auszDir = new File(kasseBase + "/" + y + "/Kontoausz\u00fcge");
+        }
+        if (auszDir.exists() && auszDir.isDirectory())
+        {
+          File[] bankSubdirs = auszDir.listFiles();
+          if (bankSubdirs != null)
+          {
+            for (File bSub : bankSubdirs)
+            {
+              if (bSub.isDirectory())
+              {
+                File[] stFiles = bSub.listFiles();
+                if (stFiles != null)
+                {
+                  for (File stf : stFiles)
+                  {
+                    if (stf.isFile() && stf.getName().toLowerCase().endsWith(".pdf"))
+                    {
+                      String zipPath = "Kontoauszuege/" + y + "/" + bSub.getName() + "/" + stf.getName();
+                      try
+                      {
+                        zos.putNextEntry(new ZipEntry(zipPath));
+                        byte[] fBytes = java.nio.file.Files.readAllBytes(stf.toPath());
+                        zos.write(fBytes);
+                        zos.closeEntry();
+                        updateExportLogs("Kontoauszug hinzugefügt: " + zipPath);
+                      }
+                      catch (Exception e)
+                      {
+                        Logger.error("Fehler beim Hinzufügen von Kontoauszug: " + stf.getAbsolutePath(), e);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
 
       List<String> zipFiles = new ArrayList<>();
       for (int y = targetYear - 2; y <= targetYear; y++)
@@ -2014,7 +2094,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
     Logger.info(msg);
   }
 
-  private void generateSteuerPDFs(int targetYear, List<File> targetDirs) throws Exception
+  private void generateSteuerPDFs(int targetYear, List<File> targetDirs, Map<Long, List<BuchungDokument>> docsByReferenz) throws Exception
   {
     boolean turnusJaehrlich = false;
     try
@@ -2045,7 +2125,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
         bookings.add(it.next());
       }
 
-      ProcessedData data = processBookings(bookings, y, y, null);
+      ProcessedData data = processBookings(bookings, y, y, docsByReferenz);
 
       Map<Sphere, Map<Integer, Double>> incomeBySphereAndYear = data.incomeBySphereAndYear;
       Map<Sphere, Map<Integer, Double>> expenseBySphereAndYear = data.expenseBySphereAndYear;
@@ -2085,7 +2165,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
 
         // Report 7: Pruefprotokoll (Plausibilitätsprüfung)
         File file7 = new File(dir, y + " Pruefprotokoll.pdf");
-        List<PlausibilityResult> pResults = runPlausibilityChecks(data, y, y, bookings, null);
+        List<PlausibilityResult> pResults = runPlausibilityChecks(data, y, y, bookings, docsByReferenz);
         writePruefprotokollPDF(file7, pResults, y, y, data);
       }
     }
