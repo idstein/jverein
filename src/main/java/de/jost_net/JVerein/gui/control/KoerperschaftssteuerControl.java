@@ -130,6 +130,19 @@ public class KoerperschaftssteuerControl extends AbstractControl
   private Table vermoegenTable;
   private Table ruecklagenTable;
   private Text exportLogsText;
+  // Cached Audit Data Structure
+  private static class CachedAuditData
+  {
+    int targetYear;
+    int startYear;
+    boolean turnusJaehrlich;
+    ProcessedData data;
+    List<PlausibilityResult> plausibilityResults;
+    List<Buchung> bookings;
+    Map<Long, List<BuchungDokument>> docsByReferenz;
+  }
+
+  private CachedAuditData cachedAuditData = null;
 
   // Checkboxen checklist
   private CheckboxInput taetigkeitsberichtCb;
@@ -202,7 +215,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
           if (p != null)
           {
             settings.setAttribute("target_year", p.getTargetYear());
-            refreshAudits();
+            refreshAuditsAsync(false);
           }
         }
         catch (Exception e)
@@ -578,7 +591,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
     exportLogsText.setText("Bereit für Export...");
 
     // Trigger initial audit load
-    refreshAudits();
+    refreshAuditsAsync(false);
   }
 
   public Action getRefreshAction()
@@ -590,7 +603,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
       {
         try
         {
-          refreshAudits();
+          refreshAuditsAsync(true);
           GUI.getStatusBar().setSuccessText("Audits erfolgreich aktualisiert.");
         }
         catch (Exception e)
@@ -602,63 +615,122 @@ public class KoerperschaftssteuerControl extends AbstractControl
     };
   }
 
-  private void refreshAudits() throws Exception
+  public void refreshAudits() throws Exception
+  {
+    refreshAuditsAsync(true);
+  }
+
+  public void refreshAuditsAsync(boolean forceReload) throws Exception
   {
     if (targetYearInput == null || targetYearInput.getValue() == null)
     {
       return;
     }
+    final int targetYear = ((YearPeriod) targetYearInput.getValue()).getTargetYear();
+
     boolean turnusJaehrlich = false;
     try
     {
       turnusJaehrlich = (Boolean) Einstellungen.getEinstellung(Einstellungen.Property.KSTTURNUSJAEHRLICH);
     }
-    catch (Exception e)
+    catch (Exception e) {}
+
+    final int startYear = turnusJaehrlich ? targetYear : (targetYear - 2);
+
+    if (!forceReload && cachedAuditData != null && cachedAuditData.targetYear == targetYear && cachedAuditData.startYear == startYear)
     {
-      // fallback
+      renderCachedAuditResults();
+      return;
     }
 
-    int targetYear = ((YearPeriod) targetYearInput.getValue()).getTargetYear();
-    int startYear = turnusJaehrlich ? targetYear : (targetYear - 2);
+    final boolean turnusJaehrlichFinal = turnusJaehrlich;
+
+    de.willuhn.jameica.system.Application.getController().start(new de.willuhn.jameica.system.BackgroundTask()
+    {
+      @Override
+      public void run(de.willuhn.util.ProgressMonitor monitor) throws ApplicationException
+      {
+        try
+        {
+          monitor.setStatusText("Lade Körperschaftssteuer-Audits & Plausibilitätsprüfungen...");
+          monitor.setPercentComplete(10);
+
+          SimpleDateFormat sdf = new SimpleDateFormat("dd.MM.yyyy");
+          Calendar cal = Calendar.getInstance();
+          cal.set(startYear, Calendar.JANUARY, 1, 0, 0, 0);
+          Date fromDate = cal.getTime();
+          cal.set(targetYear, Calendar.DECEMBER, 31, 23, 59, 59);
+          Date toDate = cal.getTime();
+
+          DBIterator<Buchung> it = Einstellungen.getDBService().createList(Buchung.class);
+          it.addFilter("datum >= ?", fromDate);
+          it.addFilter("datum <= ?", toDate);
+
+          List<Buchung> bookings = new ArrayList<>();
+          while (it.hasNext()) bookings.add(it.next());
+          monitor.setPercentComplete(40);
+
+          DBIterator<BuchungDokument> docIt = Einstellungen.getDBService().createList(BuchungDokument.class);
+          Map<Long, List<BuchungDokument>> docsByReferenz = new HashMap<>();
+          while (docIt.hasNext())
+          {
+            BuchungDokument doc = docIt.next();
+            if (doc.getReferenz() != null)
+            {
+              docsByReferenz.computeIfAbsent(doc.getReferenz(), k -> new ArrayList<>()).add(doc);
+            }
+          }
+          monitor.setPercentComplete(60);
+
+          ProcessedData data = processBookings(bookings, startYear, targetYear, docsByReferenz);
+          List<PlausibilityResult> plausibilityResults = runPlausibilityChecks(data, startYear, targetYear, bookings, docsByReferenz);
+          monitor.setPercentComplete(90);
+
+          CachedAuditData cad = new CachedAuditData();
+          cad.targetYear = targetYear;
+          cad.startYear = startYear;
+          cad.turnusJaehrlich = turnusJaehrlichFinal;
+          cad.data = data;
+          cad.plausibilityResults = plausibilityResults;
+          cad.bookings = bookings;
+          cad.docsByReferenz = docsByReferenz;
+          cachedAuditData = cad;
+
+          GUI.getDisplay().asyncExec(() -> {
+            try { renderCachedAuditResults(); } catch (Exception e) { Logger.error("Fehler beim Zeichnen der Audits", e); }
+          });
+
+          monitor.setPercentComplete(100);
+          monitor.setStatus(de.willuhn.util.ProgressMonitor.STATUS_DONE);
+          monitor.setStatusText("Audits geladen");
+        }
+        catch (Exception e)
+        {
+          Logger.error("Fehler beim Laden der Audits", e);
+          throw new ApplicationException("Fehler beim Laden der Audits: " + e.getMessage());
+        }
+      }
+
+      @Override
+      public void interrupt() {}
+      @Override
+      public boolean isInterrupted() { return false; }
+    });
+  }
+
+  private void renderCachedAuditResults() throws Exception
+  {
+    if (cachedAuditData == null) return;
+
+    int targetYear = cachedAuditData.targetYear;
+    int startYear = cachedAuditData.startYear;
+    ProcessedData data = cachedAuditData.data;
+    List<PlausibilityResult> plausibilityResults = cachedAuditData.plausibilityResults;
+    List<Buchung> bookings = cachedAuditData.bookings;
+    Map<Long, List<BuchungDokument>> docsByReferenz = cachedAuditData.docsByReferenz;
 
     SimpleDateFormat sdf = new SimpleDateFormat("dd.MM.yyyy");
     Calendar cal = Calendar.getInstance();
-    cal.set(startYear, Calendar.JANUARY, 1, 0, 0, 0);
-    Date fromDate = cal.getTime();
-    cal.set(targetYear, Calendar.DECEMBER, 31, 23, 59, 59);
-    Date toDate = cal.getTime();
-
-    // Query bookings in turnus range
-    DBIterator<Buchung> it = Einstellungen.getDBService().createList(Buchung.class);
-    it.addFilter("datum >= ?", fromDate);
-    it.addFilter("datum <= ?", toDate);
-
-    List<Buchung> bookings = new ArrayList<>();
-    while (it.hasNext())
-    {
-      bookings.add(it.next());
-    }
-
-    // Query documents
-    DBIterator<BuchungDokument> docIt = Einstellungen.getDBService().createList(BuchungDokument.class);
-    Map<Long, List<BuchungDokument>> docsByReferenz = new HashMap<>();
-    while (docIt.hasNext())
-    {
-      BuchungDokument doc = docIt.next();
-      Long ref = doc.getReferenz();
-      if (ref != null)
-      {
-        if (!docsByReferenz.containsKey(ref))
-        {
-          docsByReferenz.put(ref, new ArrayList<>());
-        }
-        docsByReferenz.get(ref).add(doc);
-      }
-    }
-
-    // Compute audits & warnings using helper
-    ProcessedData data = processBookings(bookings, startYear, targetYear, docsByReferenz);
-    List<PlausibilityResult> plausibilityResults = runPlausibilityChecks(data, startYear, targetYear, bookings, docsByReferenz);
 
     // Populate Warnungen Table & Problem Buchungen Table
     if (warnungenTable != null && !warnungenTable.isDisposed())
