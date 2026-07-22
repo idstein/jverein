@@ -483,71 +483,20 @@ public class KoerperschaftssteuerControl extends AbstractControl
     warningsSb.append("Steuerprüfung für den ").append(turnusLabel).append("\n");
     warningsSb.append("=========================================================================\n\n");
 
-    // Write wGB warnings
-    for (int y = startYear; y <= targetYear; y++)
+    // Run full Finanzamt Plausibility Check Suite
+    List<PlausibilityResult> plausibilityResults = runPlausibilityChecks(data, startYear, targetYear, bookings, docsByReferenz);
+
+    for (PlausibilityResult r : plausibilityResults)
     {
-      double wgbGross = data.wgbGrossByYear.getOrDefault(y, 0.0);
-      double wgbNet = data.wgbNetByYear.getOrDefault(y, 0.0);
-      double limit = (y >= 2024) ? 50000.0 : 45000.0;
-
-      if (wgbGross > limit)
+      String prefix = r.level == CheckLevel.CRITICAL ? "[FEHLER] " :
+                     (r.level == CheckLevel.WARNING ? "[WARNUNG] " :
+                     (r.level == CheckLevel.INFO && r.message.contains("100%") ? "[OK] " : "[INFO] "));
+      warningsSb.append(prefix).append("Jahr ").append(r.year).append(" | ").append(r.checkName).append(": ").append(r.message).append("\n");
+      if (r.details != null && !r.details.isEmpty())
       {
-        warningsSb.append("[KRITISCH] Jahr ").append(y).append(": Einnahmen im WGB überschreiten Freibetrag von ")
-            .append(limit).append(" € (Brutto-Einnahmen: ").append(wgbGross).append(" €). Steuerpflicht droht!\n");
+        warningsSb.append("   ➜ Details: ").append(r.details).append("\n");
       }
-      else if (wgbGross >= limit * 0.8)
-      {
-        warningsSb.append("[WARNUNG] Jahr ").append(y).append(": Einnahmen im WGB nahe Freibetraggrenze von ")
-            .append(limit).append(" € (Brutto-Einnahmen: ").append(wgbGross).append(" €). Aufmerksam beobachten!\n");
-      }
-
-      if (wgbNet < 0)
-      {
-        warningsSb.append("[KRITISCH] Jahr ").append(y).append(": Wirtschaftlicher Geschäftsbetrieb weist Verlust auf (")
-            .append(wgbNet).append(" €). Risiko der Mittelfehlverwendung bei Ausgleich aus ideellem Bereich!\n");
-      }
-    }
-
-    if (!data.largeDonationsWithoutReceipt.isEmpty())
-    {
-      warningsSb.append("[WARNUNG] ").append(data.largeDonationsWithoutReceipt.size()).append(" Großspenden (> 300 €) ")
-          .append("festgestellt, für die keine formelle Zuwendungsbestätigung erfasst wurde.\n");
-    }
-
-    if (!data.unassignedBookings.isEmpty())
-    {
-      java.util.Map<Integer, java.util.List<Buchung>> unassignedByYear = new java.util.TreeMap<>();
-      for (Buchung b : data.unassignedBookings)
-      {
-        cal.setTime(b.getDatum());
-        int y = cal.get(Calendar.YEAR);
-        if (!unassignedByYear.containsKey(y))
-        {
-          unassignedByYear.put(y, new java.util.ArrayList<>());
-        }
-        unassignedByYear.get(y).add(b);
-      }
-
-      for (java.util.Map.Entry<Integer, java.util.List<Buchung>> entry : unassignedByYear.entrySet())
-      {
-        warningsSb.append("[INFO] Jahr ").append(entry.getKey()).append(": ")
-            .append(entry.getValue().size()).append(" Buchungen besitzen keine gu\u0308ltige ")
-            .append("Buchungsart oder Buchungsklasse. Bitte vor dem DATEV-Export korrigieren:\n");
-        for (Buchung b : entry.getValue())
-        {
-          warningsSb.append("  - ID: ").append(b.getID())
-              .append(", Datum: ").append(sdf.format(b.getDatum()))
-              .append(", Betrag: ").append(String.format("%.2f \u20ac", b.getBetrag()))
-              .append(", Name: ").append(b.getName() != null ? b.getName() : "")
-              .append(", Zweck: ").append(b.getZweck() != null ? b.getZweck() : "")
-              .append("\n");
-        }
-      }
-    }
-
-    if (warningsSb.length() < 200)
-    {
-      warningsSb.append("[OK] Keine schwerwiegenden Schwellenwertverletzungen oder Buchungsfehler gefunden.");
+      warningsSb.append("\n");
     }
 
     if (warnungenText != null && !warnungenText.isDisposed())
@@ -1706,7 +1655,38 @@ public class KoerperschaftssteuerControl extends AbstractControl
         docsByReferenz.get(ref).add(doc);
       }
     }
-    updateExportLogs("Dokumenten-Map fuer Belege initialisiert mit " + docsByReferenz.size() + " Referenzen.");
+    updateExportLogs("Führe Plausibilitätsprüfungen vor dem Export durch...");
+    try
+    {
+      int exportStartYear = targetYear - 2;
+      List<Buchung> allCheckBookings = new ArrayList<>();
+      for (int y = exportStartYear; y <= targetYear; y++)
+      {
+        Calendar c = Calendar.getInstance();
+        c.set(y, Calendar.JANUARY, 1, 0, 0, 0);
+        Date fD = c.getTime();
+        c.set(y, Calendar.DECEMBER, 31, 23, 59, 59);
+        Date tD = c.getTime();
+        DBIterator<Buchung> bIt = Einstellungen.getDBService().createList(Buchung.class);
+        bIt.addFilter("datum >= ?", fD);
+        bIt.addFilter("datum <= ?", tD);
+        while (bIt.hasNext()) allCheckBookings.add(bIt.next());
+      }
+      ProcessedData checkData = processBookings(allCheckBookings, exportStartYear, targetYear, docsByReferenz);
+      List<PlausibilityResult> pCheckResults = runPlausibilityChecks(checkData, exportStartYear, targetYear, allCheckBookings, docsByReferenz);
+
+      int criticals = 0, warnings = 0;
+      for (PlausibilityResult r : pCheckResults)
+      {
+        if (r.level == CheckLevel.CRITICAL) { criticals++; updateExportLogs(" [FEHLER] " + r.year + " " + r.checkName + ": " + r.message); }
+        else if (r.level == CheckLevel.WARNING) { warnings++; updateExportLogs(" [WARNUNG] " + r.year + " " + r.checkName + ": " + r.message); }
+      }
+      updateExportLogs(String.format("Plausibilitätsprüfung abgeschlossen: %d Fehler, %d Warnungen.", criticals, warnings));
+    }
+    catch (Exception e)
+    {
+      Logger.error("Fehler bei Vorab-Plausibilitätsprüfung", e);
+    }
     if (pw != null)
     {
       pw.println("Dokumenten-Map fuer Belege initialisiert mit " + docsByReferenz.size() + " Referenzen.");
