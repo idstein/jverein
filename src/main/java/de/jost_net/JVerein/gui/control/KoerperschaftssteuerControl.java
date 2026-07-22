@@ -1547,6 +1547,13 @@ public class KoerperschaftssteuerControl extends AbstractControl
       }
     }
 
+    results.sort((r1, r2) -> {
+      int c1 = r1.level == CheckLevel.CRITICAL ? 0 : (r1.level == CheckLevel.WARNING ? 1 : 2);
+      int c2 = r2.level == CheckLevel.CRITICAL ? 0 : (r2.level == CheckLevel.WARNING ? 1 : 2);
+      if (c1 != c2) return Integer.compare(c1, c2);
+      return Integer.compare(r1.year, r2.year);
+    });
+
     return results;
   }
 
@@ -1922,7 +1929,15 @@ public class KoerperschaftssteuerControl extends AbstractControl
         data.wgbNetByYear.put(year, data.wgbNetByYear.getOrDefault(year, 0.0) + netResult);
       }
 
-      if (docsByReferenz != null && (bart == null || (bart.getArt() != 2 && !isBankFee)) && !docsByReferenz.containsKey(Long.valueOf(b.getID())))
+      boolean hasAttachment = (docsByReferenz != null && docsByReferenz.containsKey(Long.valueOf(b.getID())));
+      boolean hasAuszugsnummer = (b.getAuszugsnummer() != null && b.getAuszugsnummer() > 0)
+                              || (b.getBlattnummer() != null && b.getBlattnummer() > 0);
+      String num = (bart != null && bart.getNummer() != null) ? bart.getNummer() : "";
+      boolean isExemptFromReceiptFile = num.startsWith("400") || num.startsWith("401") || num.startsWith("1372") 
+                                     || (num.startsWith("404") && betrag <= 300.0)
+                                     || hasAuszugsnummer || num.startsWith("6855");
+
+      if (!hasAttachment && !isExemptFromReceiptFile && (bart == null || bart.getArt() != 2))
       {
         data.missingBelegeList.add(b);
       }
