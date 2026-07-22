@@ -450,6 +450,9 @@ public class KoerperschaftssteuerControl extends AbstractControl
       @Override
       public void handleAction(Object context) throws ApplicationException
       {
+        final int targetYear = (targetYearInput != null && targetYearInput.getValue() != null) ?
+            ((YearPeriod) targetYearInput.getValue()).getTargetYear() : Calendar.getInstance().get(Calendar.YEAR);
+
         de.willuhn.jameica.system.Application.getController().start(new de.willuhn.jameica.system.BackgroundTask()
         {
           @Override
@@ -461,7 +464,6 @@ public class KoerperschaftssteuerControl extends AbstractControl
               monitor.setPercentComplete(10);
               updateExportLogs("=== Starte manuelle Plausibilitätsprüfung ===");
 
-              int targetYear = ((YearPeriod) targetYearInput.getValue()).getTargetYear();
               boolean turnusJaehrlich = false;
               try { turnusJaehrlich = (Boolean) Einstellungen.getEinstellung(Einstellungen.Property.KSTTURNUSJAEHRLICH); } catch (Exception e) {}
               int startYear = turnusJaehrlich ? targetYear : (targetYear - 2);
@@ -509,6 +511,12 @@ public class KoerperschaftssteuerControl extends AbstractControl
                 else infos++;
               }
               updateExportLogs(String.format("Prüfung beendet: %d Fehler, %d Warnungen, %d Hinweise.", criticals, warnings, infos));
+
+              // Update GUI audit tabs on UI thread
+              GUI.getDisplay().asyncExec(() -> {
+                try { refreshAudits(); } catch (Exception e) { Logger.error("Fehler beim Aktualisieren der Audits", e); }
+              });
+
               monitor.setPercentComplete(100);
               monitor.setStatus(de.willuhn.util.ProgressMonitor.STATUS_DONE);
               monitor.setStatusText("Plausibilitätsprüfung beendet");
@@ -535,6 +543,9 @@ public class KoerperschaftssteuerControl extends AbstractControl
       @Override
       public void handleAction(Object context) throws ApplicationException
       {
+        final int targetYear = (targetYearInput != null && targetYearInput.getValue() != null) ?
+            ((YearPeriod) targetYearInput.getValue()).getTargetYear() : Calendar.getInstance().get(Calendar.YEAR);
+
         de.willuhn.jameica.system.Application.getController().start(new de.willuhn.jameica.system.BackgroundTask()
         {
           @Override
@@ -544,7 +555,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
             {
               monitor.setStatusText("Starte DATEV-Exportpaketierung...");
               monitor.setPercentComplete(5);
-              generateDatevExportPackageWithMonitor(monitor);
+              generateDatevExportPackage(targetYear, monitor);
             }
             catch (Exception e)
             {
@@ -2434,10 +2445,19 @@ public class KoerperschaftssteuerControl extends AbstractControl
 
   private void updateExportLogs(String msg)
   {
-    if (exportLogsText != null && !exportLogsText.isDisposed())
+    try
     {
-      String curr = exportLogsText.getText();
-      exportLogsText.setText(curr + "\n" + msg);
+      GUI.getDisplay().asyncExec(() -> {
+        if (exportLogsText != null && !exportLogsText.isDisposed())
+        {
+          String curr = exportLogsText.getText();
+          exportLogsText.setText(curr + "\n" + msg);
+        }
+      });
+    }
+    catch (Exception e)
+    {
+      // Fallback if display is unavailable
     }
     Logger.info(msg);
   }
