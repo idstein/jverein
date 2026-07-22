@@ -252,6 +252,21 @@ public class KoerperschaftssteuerControl extends AbstractControl
       col.setWidth(wWidths[i]);
     }
 
+    warnungenTable.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter()
+    {
+      @Override
+      public void widgetSelected(org.eclipse.swt.events.SelectionEvent e)
+      {
+        int idx = warnungenTable.getSelectionIndex();
+        if (idx >= 0 && idx < warnungenTable.getItemCount())
+        {
+          TableItem item = warnungenTable.getItem(idx);
+          PlausibilityResult selectedResult = (PlausibilityResult) item.getData("result");
+          filterProblemBuchungenTable(selectedResult);
+        }
+      }
+    });
+
     Group gr2 = new Group(parent, SWT.NONE);
     gr2.setText("Betroffene Buchungen (Doppelklick zum Öffnen / Bearbeiten)");
     gr2.setLayout(new GridLayout(1, false));
@@ -739,6 +754,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
       for (PlausibilityResult r : plausibilityResults)
       {
         TableItem item = new TableItem(warnungenTable, SWT.NONE);
+        item.setData("result", r);
         if (r.level == CheckLevel.CRITICAL)
         {
           item.setText(0, "✗ FEHLER");
@@ -762,76 +778,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
       }
     }
 
-    if (problemBuchungenTable != null && !problemBuchungenTable.isDisposed())
-    {
-      problemBuchungenTable.removeAll();
-      problemBuchungenList.clear();
-      Set<Long> addedBookingIds = new java.util.HashSet<>();
-
-      // 1. Unassigned / missing account bookings
-      for (Buchung b : bookings)
-      {
-        String problemDesc = null;
-        if (b.getBuchungsart() == null || b.getBuchungsklasse() == null)
-        {
-          problemDesc = "Fehlende Sphären- / Buchungsartzuordnung";
-        }
-        else if (b.getKonto() == null)
-        {
-          problemDesc = "Fehlendes Finanzkonto";
-        }
-
-        if (problemDesc != null)
-        {
-          addedBookingIds.add(Long.valueOf(b.getID()));
-          problemBuchungenList.add(b);
-          TableItem item = new TableItem(problemBuchungenTable, SWT.NONE);
-          item.setText(0, String.valueOf(b.getID()));
-          item.setText(1, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
-          item.setText(2, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Ohne Buchungsart");
-          item.setText(3, b.getName() != null ? b.getName() : "");
-          item.setText(4, b.getZweck() != null ? b.getZweck() : "");
-          item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
-          item.setText(6, problemDesc);
-        }
-      }
-
-      // 2. Missing digital receipts
-      for (Buchung b : data.missingBelegeList)
-      {
-        if (!addedBookingIds.contains(Long.valueOf(b.getID())))
-        {
-          addedBookingIds.add(Long.valueOf(b.getID()));
-          problemBuchungenList.add(b);
-          TableItem item = new TableItem(problemBuchungenTable, SWT.NONE);
-          item.setText(0, String.valueOf(b.getID()));
-          item.setText(1, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
-          item.setText(2, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Ohne Buchungsart");
-          item.setText(3, b.getName() != null ? b.getName() : "");
-          item.setText(4, b.getZweck() != null ? b.getZweck() : "");
-          item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
-          item.setText(6, "Digitale Belegdatei fehlt (GoBD)");
-        }
-      }
-
-      // 3. Large donations > 300 € without receipt
-      for (Buchung b : data.largeDonationsWithoutReceipt)
-      {
-        if (!addedBookingIds.contains(Long.valueOf(b.getID())))
-        {
-          addedBookingIds.add(Long.valueOf(b.getID()));
-          problemBuchungenList.add(b);
-          TableItem item = new TableItem(problemBuchungenTable, SWT.NONE);
-          item.setText(0, String.valueOf(b.getID()));
-          item.setText(1, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
-          item.setText(2, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Spende");
-          item.setText(3, b.getName() != null ? b.getName() : "");
-          item.setText(4, b.getZweck() != null ? b.getZweck() : "");
-          item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
-          item.setText(6, "Großspende >300€: Zuwendungsbestätigung fehlt");
-        }
-      }
-    }
+    filterProblemBuchungenTable(null);
 
     // Populate missing receipts & Nachweise table (unified list)
     if (missingBelegeTable != null && !missingBelegeTable.isDisposed())
@@ -1118,6 +1065,105 @@ public class KoerperschaftssteuerControl extends AbstractControl
         vermoegenTable.setRedraw(true);
         ruecklagenTable.setRedraw(true);
       }
+    }
+  }
+
+  private void filterProblemBuchungenTable(PlausibilityResult filterResult)
+  {
+    if (problemBuchungenTable == null || problemBuchungenTable.isDisposed() || cachedAuditData == null)
+    {
+      return;
+    }
+
+    try
+    {
+      problemBuchungenTable.removeAll();
+      problemBuchungenList.clear();
+
+      SimpleDateFormat sdf = new SimpleDateFormat("dd.MM.yyyy");
+      List<Buchung> bookings = cachedAuditData.bookings;
+      ProcessedData data = cachedAuditData.data;
+      Set<Long> addedBookingIds = new java.util.HashSet<>();
+
+      String checkName = (filterResult != null && filterResult.checkName != null) ? filterResult.checkName : "";
+
+      for (Buchung b : bookings)
+      {
+        if (filterResult != null && b.getDatum() != null)
+        {
+          Calendar c = Calendar.getInstance();
+          c.setTime(b.getDatum());
+          if (c.get(Calendar.YEAR) != filterResult.year)
+          {
+            continue;
+          }
+        }
+
+        String problemDesc = null;
+
+        if (checkName.isEmpty() || checkName.contains("Unzugeordnete"))
+        {
+          if (b.getBuchungsart() == null || b.getBuchungsklasse() == null)
+          {
+            problemDesc = "Fehlende Sphären- / Buchungsartzuordnung";
+          }
+        }
+        if (problemDesc == null && (checkName.isEmpty() || checkName.contains("Kontierung")))
+        {
+          if (b.getKonto() == null)
+          {
+            problemDesc = "Fehlendes Finanzkonto";
+          }
+        }
+        if (problemDesc == null && (checkName.isEmpty() || checkName.contains("Belegabdeckung") || checkName.contains("GoBD")))
+        {
+          if (data != null && data.missingBelegeList.contains(b))
+          {
+            problemDesc = "Digitale Belegdatei fehlt (GoBD)";
+          }
+        }
+        if (problemDesc == null && (checkName.isEmpty() || checkName.contains("Großspende") || checkName.contains("Spenden")))
+        {
+          if (data != null && data.largeDonationsWithoutReceipt.contains(b))
+          {
+            problemDesc = "Großspende >300€: Zuwendungsbestätigung fehlt";
+          }
+        }
+
+        // If specific filter selected and no direct problem matched, show year's bookings for context
+        if (problemDesc == null && !checkName.isEmpty() && filterResult != null && filterResult.level != CheckLevel.INFO)
+        {
+          // For general warning checks (e.g. WGB Freigrenze), list bookings of that year
+          if (checkName.contains("WGB"))
+          {
+            if (b.getBuchungsklasse() != null && getSphere(b.getBuchungsklasse(), b.getBuchungsart()) == Sphere.WGB)
+            {
+              problemDesc = "WGB-Buchung (" + filterResult.checkName + ")";
+            }
+          }
+        }
+
+        if (problemDesc != null)
+        {
+          if (!addedBookingIds.contains(Long.valueOf(b.getID())))
+          {
+            addedBookingIds.add(Long.valueOf(b.getID()));
+            problemBuchungenList.add(b);
+            TableItem item = new TableItem(problemBuchungenTable, SWT.NONE);
+            item.setText(0, String.valueOf(b.getID()));
+            item.setText(1, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
+            item.setText(2, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Ohne Buchungsart");
+            item.setText(3, b.getName() != null ? b.getName() : "");
+            item.setText(4, b.getZweck() != null ? b.getZweck() : "");
+            item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
+            item.setText(6, problemDesc);
+          }
+        }
+      }
+    }
+    catch (Exception e)
+    {
+      Logger.error("Fehler beim Filtern der Betroffenen Buchungen", e);
     }
   }
 
