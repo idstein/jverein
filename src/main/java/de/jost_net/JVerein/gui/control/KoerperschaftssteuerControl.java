@@ -664,31 +664,29 @@ public class KoerperschaftssteuerControl extends AbstractControl
     if (warnungenTable != null && !warnungenTable.isDisposed())
     {
       warnungenTable.removeAll();
-      int issueCount = 0;
       for (PlausibilityResult r : plausibilityResults)
       {
-        if (r.level == CheckLevel.CRITICAL || r.level == CheckLevel.WARNING)
-        {
-          issueCount++;
-          TableItem item = new TableItem(warnungenTable, SWT.NONE);
-          item.setText(0, r.level == CheckLevel.CRITICAL ? "✗ FEHLER" : "⚠ WARNUNG");
-          item.setForeground(0, r.level == CheckLevel.CRITICAL ?
-              GUI.getDisplay().getSystemColor(SWT.COLOR_RED) : GUI.getDisplay().getSystemColor(SWT.COLOR_DARK_YELLOW));
-          item.setText(1, String.valueOf(r.year));
-          item.setText(2, r.checkName);
-          String fullDetails = r.message + (r.details != null ? " (" + r.details + ")" : "");
-          item.setText(3, fullDetails);
-        }
-      }
-
-      if (issueCount == 0)
-      {
         TableItem item = new TableItem(warnungenTable, SWT.NONE);
-        item.setText(0, "✓ OK");
-        item.setForeground(0, GUI.getDisplay().getSystemColor(SWT.COLOR_GREEN));
-        item.setText(1, startYear + "-" + targetYear);
-        item.setText(2, "Plausibilitätsprüfung");
-        item.setText(3, "Keine Warnungen oder schwerwiegenden Plausibilitätsfehler gefunden. Alles in Ordnung!");
+        if (r.level == CheckLevel.CRITICAL)
+        {
+          item.setText(0, "✗ FEHLER");
+          item.setForeground(0, GUI.getDisplay().getSystemColor(SWT.COLOR_RED));
+        }
+        else if (r.level == CheckLevel.WARNING)
+        {
+          item.setText(0, "⚠ WARNUNG");
+          item.setForeground(0, GUI.getDisplay().getSystemColor(SWT.COLOR_DARK_YELLOW));
+        }
+        else
+        {
+          item.setText(0, "✓ OK");
+          item.setForeground(0, GUI.getDisplay().getSystemColor(SWT.COLOR_GREEN));
+        }
+
+        item.setText(1, String.valueOf(r.year));
+        item.setText(2, r.checkName);
+        String fullDetails = r.message + (r.details != null ? " (" + r.details + ")" : "");
+        item.setText(3, fullDetails);
       }
     }
 
@@ -696,8 +694,9 @@ public class KoerperschaftssteuerControl extends AbstractControl
     {
       problemBuchungenTable.removeAll();
       problemBuchungenList.clear();
+      Set<Long> addedBookingIds = new java.util.HashSet<>();
 
-      // Collect unassigned bookings and bookings without account or category
+      // 1. Unassigned / missing account bookings
       for (Buchung b : bookings)
       {
         String problemDesc = null;
@@ -707,11 +706,12 @@ public class KoerperschaftssteuerControl extends AbstractControl
         }
         else if (b.getKonto() == null)
         {
-          problemDesc = "Fehlendes Finanazkonto";
+          problemDesc = "Fehlendes Finanzkonto";
         }
 
         if (problemDesc != null)
         {
+          addedBookingIds.add(Long.valueOf(b.getID()));
           problemBuchungenList.add(b);
           TableItem item = new TableItem(problemBuchungenTable, SWT.NONE);
           item.setText(0, String.valueOf(b.getID()));
@@ -721,6 +721,42 @@ public class KoerperschaftssteuerControl extends AbstractControl
           item.setText(4, b.getZweck() != null ? b.getZweck() : "");
           item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
           item.setText(6, problemDesc);
+        }
+      }
+
+      // 2. Missing digital receipts
+      for (Buchung b : data.missingBelegeList)
+      {
+        if (!addedBookingIds.contains(Long.valueOf(b.getID())))
+        {
+          addedBookingIds.add(Long.valueOf(b.getID()));
+          problemBuchungenList.add(b);
+          TableItem item = new TableItem(problemBuchungenTable, SWT.NONE);
+          item.setText(0, String.valueOf(b.getID()));
+          item.setText(1, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
+          item.setText(2, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Ohne Buchungsart");
+          item.setText(3, b.getName() != null ? b.getName() : "");
+          item.setText(4, b.getZweck() != null ? b.getZweck() : "");
+          item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
+          item.setText(6, "Digitale Belegdatei fehlt (GoBD)");
+        }
+      }
+
+      // 3. Large donations > 300 € without receipt
+      for (Buchung b : data.largeDonationsWithoutReceipt)
+      {
+        if (!addedBookingIds.contains(Long.valueOf(b.getID())))
+        {
+          addedBookingIds.add(Long.valueOf(b.getID()));
+          problemBuchungenList.add(b);
+          TableItem item = new TableItem(problemBuchungenTable, SWT.NONE);
+          item.setText(0, String.valueOf(b.getID()));
+          item.setText(1, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
+          item.setText(2, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Spende");
+          item.setText(3, b.getName() != null ? b.getName() : "");
+          item.setText(4, b.getZweck() != null ? b.getZweck() : "");
+          item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
+          item.setText(6, "Großspende >300€: Zuwendungsbestätigung fehlt");
         }
       }
     }
