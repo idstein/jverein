@@ -586,17 +586,25 @@ public class KoerperschaftssteuerControl extends AbstractControl
     // Run full Finanzamt Plausibility Check Suite
     List<PlausibilityResult> plausibilityResults = runPlausibilityChecks(data, startYear, targetYear, bookings, docsByReferenz);
 
+    int issueCount = 0;
     for (PlausibilityResult r : plausibilityResults)
     {
-      String prefix = r.level == CheckLevel.CRITICAL ? "[FEHLER] " :
-                     (r.level == CheckLevel.WARNING ? "[WARNUNG] " :
-                     (r.level == CheckLevel.INFO && r.message.contains("100%") ? "[OK] " : "[INFO] "));
-      warningsSb.append(prefix).append("Jahr ").append(r.year).append(" | ").append(r.checkName).append(": ").append(r.message).append("\n");
-      if (r.details != null && !r.details.isEmpty())
+      if (r.level == CheckLevel.CRITICAL || r.level == CheckLevel.WARNING)
       {
-        warningsSb.append("   ➜ Details: ").append(r.details).append("\n");
+        issueCount++;
+        String prefix = r.level == CheckLevel.CRITICAL ? "[FEHLER] " : "[WARNUNG] ";
+        warningsSb.append(prefix).append("Jahr ").append(r.year).append(" | ").append(r.checkName).append(": ").append(r.message).append("\n");
+        if (r.details != null && !r.details.isEmpty())
+        {
+          warningsSb.append("   ➜ Details: ").append(r.details).append("\n");
+        }
+        warningsSb.append("\n");
       }
-      warningsSb.append("\n");
+    }
+
+    if (issueCount == 0)
+    {
+      warningsSb.append("[OK] Keine Warnungen oder schwerwiegenden Plausibilitätsfehler gefunden. Alles in Ordnung!\n");
     }
 
     if (warnungenText != null && !warnungenText.isDisposed())

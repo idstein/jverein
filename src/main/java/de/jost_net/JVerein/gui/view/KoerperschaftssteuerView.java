@@ -37,8 +37,8 @@ public class KoerperschaftssteuerView extends AbstractView
     final TabFolder folder = new TabFolder(getParent(), SWT.NONE);
     folder.setLayoutData(new GridData(GridData.FILL_BOTH));
 
-    // Tab 1: Grenzwerte & Warnungen (Audits)
-    TabGroup warnungenGroup = new TabGroup(folder, "Steuer-Audits & Warnungen", true, 1);
+    // Tab 1: Warnungen
+    TabGroup warnungenGroup = new TabGroup(folder, "Warnungen", true, 1);
     control.paintWarnungenTab(warnungenGroup.getComposite());
 
     // Tab 2: Beleg- & Spenden-Audits
@@ -79,7 +79,7 @@ public class KoerperschaftssteuerView extends AbstractView
     ButtonArea buttons = new ButtonArea();
     buttons.addButton("Hilfe", new DokumentationAction(),
         null, false, "question-circle.png");
-    buttons.addButton("Audits aktualisieren", control.getRefreshAction(),
+    buttons.addButton("Plausibilitätsprüfung", control.getRefreshAction(),
         null, false, "view-refresh.png");
     buttons.paint(this.getParent());
   }
