@@ -1351,16 +1351,32 @@ public class KoerperschaftssteuerControl extends AbstractControl
                                 || (b.getBlattnummer() != null && b.getBlattnummer() > 0);
 
         String num = (ba != null && ba.getNummer() != null) ? ba.getNummer() : "";
+        String bez = (ba != null && ba.getBezeichnung() != null) ? ba.getBezeichnung().toLowerCase() : "";
+        String zw = (b.getZweck() != null) ? b.getZweck().toLowerCase() : "";
         double betrag = Math.abs(b.getBetrag() != null ? b.getBetrag() : 0.0);
+
+        boolean isSofortabschreibungGwg = num.startsWith("4855") || num.startsWith("6260")
+                                        || (bez.contains("sofortabschreibung") || zw.contains("sofortabschreibung"))
+                                        || ((bez.contains("gwg") || zw.contains("gwg")) && !bez.contains("sammelposten") && !bez.contains("gruppe") && !bez.contains("pool"));
+
+        boolean isPoolOrRegularAfa = !isSofortabschreibungGwg && (
+            num.startsWith("6200") || num.startsWith("6220") || num.startsWith("6230")
+         || num.startsWith("6240") || num.startsWith("6250") || num.startsWith("6262")
+         || num.startsWith("4830") || num.startsWith("4831") || num.startsWith("4832")
+         || num.startsWith("4840") || num.startsWith("4850") || num.startsWith("4862")
+         || num.startsWith("7700") || num.startsWith("7710")
+         || bez.contains("abschreibung") || bez.contains("afa") || bez.contains("sammelposten") || bez.contains("pool") || bez.contains("gruppe")
+         || zw.contains("abschreibung") || zw.contains("afa") || zw.contains("sammelposten") || zw.contains("pool") || zw.contains("gruppe")
+        );
 
         if (hasAttachment)
         {
           withAttachedBeleg++;
         }
-        else if (num.startsWith("400") || num.startsWith("401") || num.startsWith("1372") || (num.startsWith("404") && betrag <= 300.0))
+        else if (isPoolOrRegularAfa || num.startsWith("400") || num.startsWith("401") || num.startsWith("1372") || (num.startsWith("404") && betrag <= 300.0))
         {
-          // Mitgliedsbeiträge, Aufnahmegebühren, Geldtransit, Spenden <= 300 €:
-          // Kontoauszug / SEPA-Lastschrift ist gesetzlich als Beleg vollkommen ausreichend (§50 EStDV)
+          // Gruppenabschreibung / Pool-AfA / Gebaeude-AfA, membership fees, transit, donations <= 300 €:
+          // Exempt from receipt file requirement
           exemptBeleg++;
         }
         else if (hasAuszugsnummer || num.startsWith("6855"))
@@ -1979,7 +1995,24 @@ public class KoerperschaftssteuerControl extends AbstractControl
       boolean hasAuszugsnummer = (b.getAuszugsnummer() != null && b.getAuszugsnummer() > 0)
                               || (b.getBlattnummer() != null && b.getBlattnummer() > 0);
       String num = (bart != null && bart.getNummer() != null) ? bart.getNummer() : "";
-      boolean isExemptFromReceiptFile = num.startsWith("400") || num.startsWith("401") || num.startsWith("1372") 
+      String bez = (bart != null && bart.getBezeichnung() != null) ? bart.getBezeichnung().toLowerCase() : "";
+      zw = (b.getZweck() != null) ? b.getZweck().toLowerCase() : "";
+
+      boolean isSofortabschreibungGwg = num.startsWith("4855") || num.startsWith("6260")
+                                      || (bez.contains("sofortabschreibung") || zw.contains("sofortabschreibung"))
+                                      || ((bez.contains("gwg") || zw.contains("gwg")) && !bez.contains("sammelposten") && !bez.contains("gruppe") && !bez.contains("pool"));
+
+      boolean isPoolOrRegularAfa = !isSofortabschreibungGwg && (
+          num.startsWith("6200") || num.startsWith("6220") || num.startsWith("6230")
+       || num.startsWith("6240") || num.startsWith("6250") || num.startsWith("6262")
+       || num.startsWith("4830") || num.startsWith("4831") || num.startsWith("4832")
+       || num.startsWith("4840") || num.startsWith("4850") || num.startsWith("4862")
+       || num.startsWith("7700") || num.startsWith("7710")
+       || bez.contains("abschreibung") || bez.contains("afa") || bez.contains("sammelposten") || bez.contains("pool") || bez.contains("gruppe")
+       || zw.contains("abschreibung") || zw.contains("afa") || zw.contains("sammelposten") || zw.contains("pool") || zw.contains("gruppe")
+      );
+
+      boolean isExemptFromReceiptFile = isPoolOrRegularAfa || num.startsWith("400") || num.startsWith("401") || num.startsWith("1372") 
                                      || (num.startsWith("404") && betrag <= 300.0)
                                      || hasAuszugsnummer || num.startsWith("6855");
 
