@@ -374,20 +374,120 @@ public class KoerperschaftssteuerControl extends AbstractControl
     btnComp.setLayout(new GridLayout(2, false));
     btnComp.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));
 
+    // Button 1: Standalone Plausibilitätsprüfung
+    Button checkBtn = new Button("Plausibilitätsprüfung ausführen", new Action()
+    {
+      @Override
+      public void handleAction(Object context) throws ApplicationException
+      {
+        de.willuhn.jameica.system.Application.getController().start(new de.willuhn.jameica.system.BackgroundTask()
+        {
+          @Override
+          public void run(de.willuhn.util.ProgressMonitor monitor) throws ApplicationException
+          {
+            try
+            {
+              monitor.setStatusText("Starte Plausibilitätsprüfung...");
+              monitor.setPercentComplete(10);
+              updateExportLogs("=== Starte manuelle Plausibilitätsprüfung ===");
+
+              int targetYear = ((YearPeriod) targetYearInput.getValue()).getTargetYear();
+              boolean turnusJaehrlich = false;
+              try { turnusJaehrlich = (Boolean) Einstellungen.getEinstellung(Einstellungen.Property.KSTTURNUSJAEHRLICH); } catch (Exception e) {}
+              int startYear = turnusJaehrlich ? targetYear : (targetYear - 2);
+
+              DBIterator<BuchungDokument> docIt = Einstellungen.getDBService().createList(BuchungDokument.class);
+              Map<Long, List<BuchungDokument>> docsByReferenz = new HashMap<>();
+              while (docIt.hasNext())
+              {
+                BuchungDokument doc = docIt.next();
+                if (doc.getReferenz() != null)
+                {
+                  docsByReferenz.computeIfAbsent(doc.getReferenz(), k -> new ArrayList<>()).add(doc);
+                }
+              }
+              monitor.setPercentComplete(30);
+
+              List<Buchung> allCheckBookings = new ArrayList<>();
+              for (int y = startYear; y <= targetYear; y++)
+              {
+                Calendar c = Calendar.getInstance();
+                c.set(y, Calendar.JANUARY, 1, 0, 0, 0);
+                Date fD = c.getTime();
+                c.set(y, Calendar.DECEMBER, 31, 23, 59, 59);
+                Date tD = c.getTime();
+                DBIterator<Buchung> bIt = Einstellungen.getDBService().createList(Buchung.class);
+                bIt.addFilter("datum >= ?", fD);
+                bIt.addFilter("datum <= ?", tD);
+                while (bIt.hasNext()) allCheckBookings.add(bIt.next());
+              }
+              monitor.setPercentComplete(50);
+              monitor.setStatusText("Prüfe Buchungen, Rücklagen und Beleg-PDFs...");
+
+              ProcessedData checkData = processBookings(allCheckBookings, startYear, targetYear, docsByReferenz);
+              List<PlausibilityResult> pCheckResults = runPlausibilityChecks(checkData, startYear, targetYear, allCheckBookings, docsByReferenz);
+              monitor.setPercentComplete(80);
+
+              int criticals = 0, warnings = 0, infos = 0;
+              for (PlausibilityResult r : pCheckResults)
+              {
+                String tag = r.level == CheckLevel.CRITICAL ? " [FEHLER] " :
+                            (r.level == CheckLevel.WARNING ? " [WARNUNG] " : " [INFO] ");
+                updateExportLogs(tag + r.year + " | " + r.checkName + ": " + r.message);
+                if (r.level == CheckLevel.CRITICAL) criticals++;
+                else if (r.level == CheckLevel.WARNING) warnings++;
+                else infos++;
+              }
+              updateExportLogs(String.format("Prüfung beendet: %d Fehler, %d Warnungen, %d Hinweise.", criticals, warnings, infos));
+              monitor.setPercentComplete(100);
+              monitor.setStatus(de.willuhn.util.ProgressMonitor.STATUS_DONE);
+              monitor.setStatusText("Plausibilitätsprüfung beendet");
+            }
+            catch (Exception e)
+            {
+              Logger.error("Fehler bei Plausibilitätsprüfung", e);
+              throw new ApplicationException("Fehler: " + e.getMessage());
+            }
+          }
+
+          @Override
+          public void interrupt() {}
+          @Override
+          public boolean isInterrupted() { return false; }
+        });
+      }
+    }, null, false, "dialog-information.png");
+    checkBtn.paint(btnComp);
+
+    // Button 2: Export-Paket erzeugen (ZIP) mit Progress Monitor
     Button exportBtn = new Button("DATEV-Exportpaket erzeugen (ZIP)", new Action()
     {
       @Override
       public void handleAction(Object context) throws ApplicationException
       {
-        try
+        de.willuhn.jameica.system.Application.getController().start(new de.willuhn.jameica.system.BackgroundTask()
         {
-          generateDatevExportPackage();
-        }
-        catch (Exception e)
-        {
-          Logger.error("Fehler beim DATEV Export", e);
-          throw new ApplicationException("Fehler beim Erzeugen des DATEV Exports: " + e.getMessage());
-        }
+          @Override
+          public void run(de.willuhn.util.ProgressMonitor monitor) throws ApplicationException
+          {
+            try
+            {
+              monitor.setStatusText("Starte DATEV-Exportpaketierung...");
+              monitor.setPercentComplete(5);
+              generateDatevExportPackageWithMonitor(monitor);
+            }
+            catch (Exception e)
+            {
+              Logger.error("Fehler beim DATEV Export", e);
+              throw new ApplicationException("Fehler beim Erzeugen des DATEV Exports: " + e.getMessage());
+            }
+          }
+
+          @Override
+          public void interrupt() {}
+          @Override
+          public boolean isInterrupted() { return false; }
+        });
       }
     }, null, false, "document-save.png");
     exportBtn.paint(btnComp);
@@ -1612,6 +1712,16 @@ public class KoerperschaftssteuerControl extends AbstractControl
     return Sphere.UNASSIGNED;
   }
 
+  private void generateDatevExportPackageWithMonitor(de.willuhn.util.ProgressMonitor monitor) throws Exception
+  {
+    if (targetYearInput == null || targetYearInput.getValue() == null)
+    {
+      return;
+    }
+    int targetYear = ((YearPeriod) targetYearInput.getValue()).getTargetYear();
+    generateDatevExportPackage(targetYear, monitor);
+  }
+
   private void generateDatevExportPackage() throws Exception
   {
     if (targetYearInput == null || targetYearInput.getValue() == null)
@@ -1619,11 +1729,21 @@ public class KoerperschaftssteuerControl extends AbstractControl
       return;
     }
     int targetYear = ((YearPeriod) targetYearInput.getValue()).getTargetYear();
-    generateDatevExportPackage(targetYear);
+    generateDatevExportPackage(targetYear, null);
   }
 
   public void generateDatevExportPackage(int targetYear) throws Exception
   {
+    generateDatevExportPackage(targetYear, null);
+  }
+
+  public void generateDatevExportPackage(int targetYear, de.willuhn.util.ProgressMonitor monitor) throws Exception
+  {
+    if (monitor != null)
+    {
+      monitor.setStatusText("Starte DATEV-Exportpaketierung für das Jahr: " + targetYear);
+      monitor.setPercentComplete(10);
+    }
     updateExportLogs("Starte DATEV-Exportpaketierung für das Jahr: " + targetYear);
     java.io.PrintWriter pw = null;
     try
@@ -2132,6 +2252,12 @@ public class KoerperschaftssteuerControl extends AbstractControl
       zos.closeEntry();
     }
 
+    if (monitor != null)
+    {
+      monitor.setPercentComplete(100);
+      monitor.setStatus(de.willuhn.util.ProgressMonitor.STATUS_DONE);
+      monitor.setStatusText("DATEV-Exportpaket erfolgreich erstellt");
+    }
     updateExportLogs("DATEV-Exportpaket erfolgreich erstellt und als ZIP gespeichert:\n" + zipFile.getAbsolutePath());
     try
     {
