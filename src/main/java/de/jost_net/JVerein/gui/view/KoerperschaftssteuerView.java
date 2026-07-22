@@ -26,7 +26,7 @@ public class KoerperschaftssteuerView extends AbstractView
   @Override
   public void bind() throws Exception
   {
-    GUI.getView().setTitle("Körperschaftssteuer-Assistent");
+    GUI.getView().setTitle("Körperschaftssteuer");
 
     final KoerperschaftssteuerControl control = new KoerperschaftssteuerControl(this);
 
@@ -49,7 +49,11 @@ public class KoerperschaftssteuerView extends AbstractView
     TabGroup ergebnisseGroup = new TabGroup(folder, "Bereichsergebnisse (EÜR)", true, 1);
     control.paintErgebnisseTab(ergebnisseGroup.getComposite());
 
-    // Tab 4: Export-Center
+    // Tab 4: Vermögensaufstellung & Rücklagen
+    TabGroup vermoegenGroup = new TabGroup(folder, "Vermögensaufstellung & Rücklagen", true, 1);
+    control.paintVermoegenTab(vermoegenGroup.getComposite());
+
+    // Tab 5: Export-Center
     TabGroup exportGroup = new TabGroup(folder, "DATEV- & PDF-Export", true, 1);
     control.paintExportTab(exportGroup.getComposite());
 

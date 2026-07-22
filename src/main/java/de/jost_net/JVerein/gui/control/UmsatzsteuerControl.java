@@ -28,6 +28,7 @@ import de.jost_net.JVerein.Einstellungen;
 import de.jost_net.JVerein.rmi.Buchung;
 import de.jost_net.JVerein.rmi.Buchungsart;
 import de.jost_net.JVerein.rmi.Buchungsklasse;
+import de.jost_net.JVerein.rmi.Konto;
 import de.willuhn.datasource.rmi.DBIterator;
 import de.willuhn.jameica.gui.AbstractControl;
 import de.willuhn.jameica.gui.AbstractView;
@@ -203,15 +204,48 @@ public class UmsatzsteuerControl extends AbstractControl
       cal.setTime(b.getDatum());
       int year = cal.get(Calendar.YEAR);
 
+      Konto konto = b.getKonto();
+      if (konto != null && konto.getKontoArt() != null && konto.getKontoArt().getKey() >= de.jost_net.JVerein.keys.Kontoart.LIMIT.getKey())
+      {
+        continue;
+      }
+
       Double betrag = b.getBetrag() != null ? b.getBetrag() : 0.0;
       Buchungsart bart = b.getBuchungsart();
-      Buchungsklasse bklasse = bart != null ? bart.getBuchungsklasse() : null;
-      
-      // Map sphere
+
+      // Read Buchungsklasse taking bkinbuchung setting into account
+      boolean klasseInBuchung = false;
+      try
+      {
+        klasseInBuchung = (Boolean) Einstellungen.getEinstellung(Einstellungen.Property.BUCHUNGSKLASSEINBUCHUNG);
+      }
+      catch (Exception e)
+      {
+        // fallback
+      }
+
+      Buchungsklasse bklasse = null;
+      if (klasseInBuchung)
+      {
+        bklasse = b.getBuchungsklasse();
+      }
+      if (bklasse == null)
+      {
+        bklasse = (bart != null) ? bart.getBuchungsklasse() : null;
+      }
+
+      // JVerein stores all amounts positive; art determines Einnahme (0) vs Ausgabe (1)
+      int art = (bart != null) ? bart.getArt() : -1;
+      boolean isEinnahme = (art == 0); // ArtBuchungsart.EINNAHME
+      boolean isAusgabe = (art == 1);  // ArtBuchungsart.AUSGABE
+
+      // Map sphere for filtering
       KoerperschaftssteuerControl.Sphere sphere = KoerperschaftssteuerControl.getSphere(bklasse);
 
-      // Compute total revenues for Kleinunternehmer check (exclude Ideeller Bereich membership fees and donations)
-      if (betrag > 0 && sphere != KoerperschaftssteuerControl.Sphere.IDEELL)
+      // Compute total revenues for Kleinunternehmer check
+      // § 19 UStG Gesamtumsatz = only geschäftlicher Bereich (WGB)
+      if (isEinnahme && betrag > 0 
+          && sphere == KoerperschaftssteuerControl.Sphere.WGB)
       {
         if (year == prevYear)
         {
@@ -223,8 +257,8 @@ public class UmsatzsteuerControl extends AbstractControl
         }
       }
 
-      // Check for § 13b Reverse Charge (expenses only in target year)
-      if (year == targetYear && betrag < 0)
+      // Check for § 13b Reverse Charge (Ausgaben in target year for foreign services)
+      if (year == targetYear && isAusgabe)
       {
         boolean isReverse = false;
         boolean isEu = true;
@@ -233,7 +267,6 @@ public class UmsatzsteuerControl extends AbstractControl
             || b.getSteuer().getName().toLowerCase().contains("reverse")))
         {
           isReverse = true;
-          // Check if EU or Non-EU (heuristic based on name)
           String name = b.getName() != null ? b.getName().toLowerCase() : "";
           if (name.contains("meta") || name.contains("facebook") || name.contains("us"))
           {
@@ -262,7 +295,7 @@ public class UmsatzsteuerControl extends AbstractControl
         if (isReverse)
         {
           reverseList.add(b);
-          double base = Math.abs(betrag);
+          double base = betrag; // Already positive in JVerein
           double rate = 0.19;
           if (b.getSteuer() != null && b.getSteuer().getSatz() != null)
           {
@@ -284,14 +317,17 @@ public class UmsatzsteuerControl extends AbstractControl
       }
     }
 
+    double limitVorjahr = getLimitVorjahr(targetYear);
+    double limitLaufend = getLimitLaufend(targetYear);
+
     // Populate Status Tab
     StringBuilder statusSb = new StringBuilder();
     statusSb.append("Steuerprüfung Kleinunternehmer-Status für das Jahr ").append(targetYear).append("\n");
     statusSb.append("=========================================================================\n\n");
-    statusSb.append(String.format("Umsatz im Vorjahr (%d): %.2f € (Grenze: 22.000,00 €)\n", prevYear, revPrevYear));
-    statusSb.append(String.format("Umsatz im laufenden Jahr (%d): %.2f € (Grenze: 50.000,00 €)\n\n", targetYear, revTargetYear));
+    statusSb.append(String.format("Umsatz im Vorjahr (%d): %.2f € (Grenze: %,.2f €)\n", prevYear, revPrevYear, limitVorjahr));
+    statusSb.append(String.format("Umsatz im laufenden Jahr (%d): %.2f € (Grenze: %,.2f €)\n\n", targetYear, revTargetYear, limitLaufend));
 
-    if (revPrevYear <= 22000.0 && revTargetYear <= 50000.0)
+    if (revPrevYear <= limitVorjahr && revTargetYear <= limitLaufend)
     {
       statusSb.append("[STATUS: OK] Der Verein erfüllt alle Kriterien für die Kleinunternehmerregelung (§ 19 UStG).\n");
       statusSb.append("Eigene Umsätze des Vereins müssen auf Rechnungen ohne Umsatzsteuer ausgewiesen werden.\n");
@@ -318,20 +354,16 @@ public class UmsatzsteuerControl extends AbstractControl
         double rate = 0.19;
         if (b.getSteuer() != null && b.getSteuer().getSatz() != null)
         {
-          r = b.getSteuer().getSatz() / 100.0;
+          rate = b.getSteuer().getSatz() / 100.0;
         }
-        else
-        {
-          r = 0.19;
-        }
-        double vat = base * r;
+        double vat = base * rate;
 
         TableItem item = new TableItem(reverseTable, SWT.NONE);
         item.setText(0, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
         item.setText(1, b.getName() != null ? b.getName() : "");
         item.setText(2, b.getZweck() != null ? b.getZweck() : "");
         item.setText(3, String.format("%.2f €", base));
-        item.setText(4, String.format("%.0f%%", r * 100.0));
+        item.setText(4, String.format("%.0f%%", rate * 100.0));
         item.setText(5, String.format("%.2f €", vat));
       }
     }
@@ -342,16 +374,16 @@ public class UmsatzsteuerControl extends AbstractControl
     elsterSb.append("=========================================================================\n\n");
     elsterSb.append("Geben Sie diese Zahlen direkt in die entsprechenden Felder ein:\n\n");
     elsterSb.append("1. Angaben zur Besteuerung der Kleinunternehmer (§ 19 Abs. 1 UStG):\n");
-    elsterSb.append(String.format("   - Zeile 33 (Umsatz im Vorjahr %d): %.0f €\n", prevYear, Math.round(revPrevYear)));
-    elsterSb.append(String.format("   - Zeile 34 (Umsatz im laufenden Jahr %d): %.0f €\n\n", targetYear, Math.round(revTargetYear)));
+    elsterSb.append(String.format("   - Zeile 33 (Umsatz im Vorjahr %d): %.0f €\n", prevYear, revPrevYear));
+    elsterSb.append(String.format("   - Zeile 34 (Umsatz im laufenden Jahr %d): %.0f €\n\n", targetYear, revTargetYear));
     
     elsterSb.append("2. Leistungsempfänger als Steuerschuldner (§ 13b UStG) - Reverse Charge:\n");
     elsterSb.append("   a) Für Leistungen von Unternehmen aus dem EU-Ausland (z.B. Google Ireland, Zoom, Microsoft Ireland):\n");
-    elsterSb.append("      - Zeile 94 (Bemessungsgrundlage): ").append(String.format("%.0f €", Math.round(reverseEuBase))).append("\n");
+    elsterSb.append("      - Zeile 94 (Bemessungsgrundlage): ").append(String.format("%.0f €", reverseEuBase)).append("\n");
     elsterSb.append("      - Zeile 94 (Steuerbetrag 19%): ").append(String.format("%.2f €", reverseEuVat)).append("\n\n");
 
     elsterSb.append("   b) Für Leistungen von Unternehmen aus dem Drittland / Nicht-EU (z.B. Facebook/Meta USA):\n");
-    elsterSb.append("      - Zeile 95 (Bemessungsgrundlage): ").append(String.format("%.0f €", Math.round(reverseNonEuBase))).append("\n");
+    elsterSb.append("      - Zeile 95 (Bemessungsgrundlage): ").append(String.format("%.0f €", reverseNonEuBase)).append("\n");
     elsterSb.append("      - Zeile 95 (Steuerbetrag 19%): ").append(String.format("%.2f €", reverseNonEuVat)).append("\n\n");
 
     elsterSb.append("Gesamte abzuführende Umsatzsteuerschuld (Zahllast): ").append(String.format("%.2f €", reverseEuVat + reverseNonEuVat)).append("\n");
@@ -361,6 +393,32 @@ public class UmsatzsteuerControl extends AbstractControl
       elsterText.setText(elsterSb.toString());
     }
   }
-  
-  private double r; // Helper variable for lambda scope compiling
+
+  private double getLimitVorjahr(int targetYear)
+  {
+    if (targetYear >= 2026)
+    {
+      return 25000.0;
+    }
+    else if (targetYear >= 2021)
+    {
+      return 22000.0;
+    }
+    else
+    {
+      return 17500.0;
+    }
+  }
+
+  private double getLimitLaufend(int targetYear)
+  {
+    if (targetYear >= 2025)
+    {
+      return 100000.0;
+    }
+    else
+    {
+      return 50000.0;
+    }
+  }
 }

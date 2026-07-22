@@ -233,12 +233,12 @@ public class MyExtension implements Extension
           "office-calendar.png"));
 
       // Körperschaftssteuer
-      buchfuehrung.addChild(new MyItem(buchfuehrung, "Körperschaftssteuer-Assistent",
+      buchfuehrung.addChild(new MyItem(buchfuehrung, "Körperschaftssteuer",
           new StartViewAction(de.jost_net.JVerein.gui.view.KoerperschaftssteuerView.class),
           "calculator.png"));
 
-      // Umsatzsteuer-Assistent
-      buchfuehrung.addChild(new MyItem(buchfuehrung, "Umsatzsteuer-Assistent",
+      // Umsatzsteuer
+      buchfuehrung.addChild(new MyItem(buchfuehrung, "Umsatzsteuer",
           new StartViewAction(de.jost_net.JVerein.gui.view.UmsatzsteuerView.class),
           "coins.png"));
 

@@ -93,6 +93,35 @@ public class JVereinPlugin extends AbstractPlugin
     Application.getMessagingFactory().registerMessageConsumer(this.umc);
 
     Application.getBootLoader().getBootable(ArchiveService.class);
+
+    final String headlessProp = System.getProperty("jverein.headless.export");
+    if (headlessProp != null)
+    {
+      new Thread(new Runnable()
+      {
+        @Override
+        public void run()
+        {
+          try
+          {
+            Thread.sleep(5000);
+            int year = Integer.parseInt(headlessProp);
+            Logger.info("Headless DATEV export triggered via startup property for year: " + year);
+            
+            de.jost_net.JVerein.gui.control.KoerperschaftssteuerControl ctrl = 
+                new de.jost_net.JVerein.gui.control.KoerperschaftssteuerControl(null);
+            ctrl.generateDatevExportPackage(year);
+            Logger.info("Headless DATEV export finished successfully. Shutting down.");
+            System.exit(0);
+          }
+          catch (Exception e)
+          {
+            Logger.error("Headless DATEV export failed", e);
+            System.exit(1);
+          }
+        }
+      }).start();
+    }
   }
 
   /**

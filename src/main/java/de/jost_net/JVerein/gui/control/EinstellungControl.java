@@ -202,6 +202,8 @@ public class EinstellungControl extends AbstractControl
 
   private CheckboxInput autobuchunguebernahme;
 
+  private CheckboxInput kstturnusjaehrlich;
+
   private CheckboxInput unterdrueckungohnebuchung;
 
   private CheckboxInput kontonummer_in_buchungsliste;
@@ -1053,6 +1055,17 @@ public class EinstellungControl extends AbstractControl
     geprueftsynchronisieren = new CheckboxInput((Boolean) Einstellungen
         .getEinstellung(Property.GEPRUEFTSYNCHRONISIEREN));
     return geprueftsynchronisieren;
+  }
+
+  public CheckboxInput getKstTurnusJaehrlich() throws RemoteException
+  {
+    if (kstturnusjaehrlich != null)
+    {
+      return kstturnusjaehrlich;
+    }
+    kstturnusjaehrlich = new CheckboxInput((Boolean) Einstellungen
+        .getEinstellung(Property.KSTTURNUSJAEHRLICH));
+    return kstturnusjaehrlich;
   }
 
   public CheckboxInput getWirtschaftsplanIstAbgeschlossen()
@@ -2798,6 +2811,8 @@ public class EinstellungControl extends AbstractControl
           (Boolean) getSplitPositionZweck().getValue());
       Einstellungen.setEinstellung(Property.GEPRUEFTSYNCHRONISIEREN,
           (Boolean) getGeprueftSynchronisieren().getValue());
+      Einstellungen.setEinstellung(Property.KSTTURNUSJAEHRLICH,
+          (Boolean) getKstTurnusJaehrlich().getValue());
       DBTransaction.commit();
 
       reloadNavigation();

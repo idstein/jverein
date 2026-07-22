@@ -57,6 +57,8 @@ public class EinstellungenBuchfuehrungView extends AbstractView
         "Bei automatischem Splitten den "
             + "Verwendungszweck aus den Sollbuchungspositionen übernehmen",
         control.getSplitPositionZweck());
+    cont.addLabelPair("Körperschaftssteuererklärung: Jährlicher VZ (statt 3-jährig)",
+        control.getKstTurnusJaehrlich());
 
     ButtonArea buttons = new ButtonArea();
     buttons.addButton("Hilfe", new DokumentationAction(),

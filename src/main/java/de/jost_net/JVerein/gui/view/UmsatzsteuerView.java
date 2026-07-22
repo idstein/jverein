@@ -26,7 +26,7 @@ public class UmsatzsteuerView extends AbstractView
   @Override
   public void bind() throws Exception
   {
-    GUI.getView().setTitle("Umsatzsteuer-Assistent");
+    GUI.getView().setTitle("Umsatzsteuer");
 
     final UmsatzsteuerControl control = new UmsatzsteuerControl(this);
 
