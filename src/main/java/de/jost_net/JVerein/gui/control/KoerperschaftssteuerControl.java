@@ -124,6 +124,7 @@ public class KoerperschaftssteuerControl extends AbstractControl
   private Table problemBuchungenTable;
   private List<Buchung> problemBuchungenList = new ArrayList<>();
   private Table missingBelegeTable;
+  private List<Buchung> missingBelegeList = new ArrayList<>();
   private Table ergebnisseTable;
   private Label ergebnisseWarningLabel;
   private Table vermoegenTable;
@@ -320,21 +321,15 @@ public class KoerperschaftssteuerControl extends AbstractControl
     l3.setText("Unterzeichnete Kassenprüfungsberichte der Kassenprüfer");
     kassenberichtCb.paint(checklistGroup);
 
-    zerRegisterCb = new CheckboxInput(settings.getBoolean("cb_zer", false));
+    zerRegisterCb = new CheckboxInput(settings.getBoolean("cb_zer", true));
     zerRegisterCb.addListener(e -> settings.setAttribute("cb_zer", (Boolean) zerRegisterCb.getValue()));
     Label l4 = new Label(checklistGroup, SWT.NONE);
-    l4.setText("Prüfung Zuwendungsempfängerregister (BfSt) auf Aktualität");
+    l4.setText("Zuwendungsempfängerregister (vom Finanzamt ans BZSt gemeldet)");
     zerRegisterCb.paint(checklistGroup);
 
-    verzichtserklaerungCb = new CheckboxInput(settings.getBoolean("cb_verzicht", false));
-    verzichtserklaerungCb.addListener(e -> settings.setAttribute("cb_verzicht", (Boolean) verzichtserklaerungCb.getValue()));
-    Label l5 = new Label(checklistGroup, SWT.NONE);
-    l5.setText("Schriftliche Verzichtserklärungen / Verträge für alle Aufwandsspenden");
-    verzichtserklaerungCb.paint(checklistGroup);
-
-    // Missing Belege Table Group
+    // Unified Missing Belege & Nachweise Table Group
     Group tableGroup = new Group(parent, SWT.NONE);
-    tableGroup.setText("Fehlende digitale Belege " + zeitraumText);
+    tableGroup.setText("Fehlende Belege, Spendenbescheinigungen & Verzichtserklärungen " + zeitraumText + " (Doppelklick zum Öffnen)");
     tableGroup.setLayout(new GridLayout(1, false));
     tableGroup.setLayoutData(new GridData(GridData.FILL_BOTH));
 
@@ -343,14 +338,36 @@ public class KoerperschaftssteuerControl extends AbstractControl
     missingBelegeTable.setLinesVisible(true);
     missingBelegeTable.setLayoutData(new GridData(GridData.FILL_BOTH));
 
-    String[] columns = {"Datum", "Buchungsart", "Name / Empfänger", "Zweck", "Betrag"};
-    int[] widths = {80, 150, 150, 200, 80};
+    String[] columns = {"ID", "Kategorie", "Datum", "Buchungsart", "Name / Empfänger", "Betrag", "Handlungsbedarf / Erforderlicher Nachweis"};
+    int[] widths = {50, 110, 80, 140, 150, 80, 260};
     for (int i = 0; i < columns.length; i++)
     {
       TableColumn col = new TableColumn(missingBelegeTable, SWT.LEFT);
       col.setText(columns[i]);
       col.setWidth(widths[i]);
     }
+
+    // Double-click listener on missingBelegeTable to open Buchung edit dialog
+    missingBelegeTable.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter()
+    {
+      @Override
+      public void widgetDefaultSelected(org.eclipse.swt.events.SelectionEvent e)
+      {
+        int idx = missingBelegeTable.getSelectionIndex();
+        if (idx >= 0 && idx < missingBelegeList.size())
+        {
+          Buchung b = missingBelegeList.get(idx);
+          try
+          {
+            new de.jost_net.JVerein.gui.action.BuchungAction(false).handleAction(b);
+          }
+          catch (Exception ex)
+          {
+            Logger.error("Fehler beim Öffnen der Buchung", ex);
+          }
+        }
+      }
+    });
   }
 
   public void paintErgebnisseTab(Composite parent) throws Exception
@@ -697,18 +714,63 @@ public class KoerperschaftssteuerControl extends AbstractControl
       }
     }
 
-    // Populate missing receipts table
+    // Populate missing receipts & Nachweise table (unified list)
     if (missingBelegeTable != null && !missingBelegeTable.isDisposed())
     {
       missingBelegeTable.removeAll();
+      missingBelegeList.clear();
+
+      // 1. Missing digital PDF receipt files (filtered against legal exemptions)
       for (Buchung b : data.missingBelegeList)
       {
+        missingBelegeList.add(b);
         TableItem item = new TableItem(missingBelegeTable, SWT.NONE);
-        item.setText(0, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
-        item.setText(1, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Ohne Buchungsart");
-        item.setText(2, b.getName() != null ? b.getName() : "");
-        item.setText(3, b.getZweck() != null ? b.getZweck() : "");
-        item.setText(4, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
+        item.setText(0, String.valueOf(b.getID()));
+        item.setText(1, "Beleg fehlt");
+        item.setText(2, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
+        item.setText(3, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Ohne Buchungsart");
+        item.setText(4, b.getName() != null ? b.getName() : "");
+        item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
+        item.setText(6, "Digitale Belegdatei (Rechnung/Quittung) als Anhang hinzufügen");
+      }
+
+      // 2. Large donations > 300 € without receipt
+      for (Buchung b : data.largeDonationsWithoutReceipt)
+      {
+        if (!missingBelegeList.contains(b))
+        {
+          missingBelegeList.add(b);
+          TableItem item = new TableItem(missingBelegeTable, SWT.NONE);
+          item.setText(0, String.valueOf(b.getID()));
+          item.setText(1, "Großspende >300€");
+          item.setText(2, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
+          item.setText(3, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Spende");
+          item.setText(4, b.getName() != null ? b.getName() : "");
+          item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
+          item.setText(6, "Formelle Zuwendungsbestätigung ausstellen & erfassen");
+        }
+      }
+
+      // 3. Aufwandsspenden / Verzichtserklärungen
+      for (Buchung b : bookings)
+      {
+        String zweck = b.getZweck() != null ? b.getZweck().toLowerCase() : "";
+        String name = b.getName() != null ? b.getName().toLowerCase() : "";
+        if (zweck.contains("verzicht") || zweck.contains("aufwand") || name.contains("verzicht"))
+        {
+          if (!missingBelegeList.contains(b))
+          {
+            missingBelegeList.add(b);
+            TableItem item = new TableItem(missingBelegeTable, SWT.NONE);
+            item.setText(0, String.valueOf(b.getID()));
+            item.setText(1, "Aufwandsspende");
+            item.setText(2, b.getDatum() != null ? sdf.format(b.getDatum()) : "");
+            item.setText(3, b.getBuchungsart() != null ? b.getBuchungsart().getBezeichnung() : "Spende");
+            item.setText(4, b.getName() != null ? b.getName() : "");
+            item.setText(5, b.getBetrag() != null ? String.format("%.2f €", b.getBetrag()) : "");
+            item.setText(6, "Schriftliche Verzichtserklärung / Vertrag erforderlich");
+          }
+        }
       }
     }
 
