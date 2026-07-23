@@ -7,17 +7,13 @@ import java.util.ArrayList;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Table;
-import org.eclipse.swt.widgets.TableColumn;
-import org.eclipse.swt.widgets.TableItem;
-import org.eclipse.swt.events.MouseAdapter;
-import org.eclipse.swt.events.MouseEvent;
 
 import de.jost_net.JVerein.Einstellungen;
 import de.jost_net.JVerein.Einstellungen.Property;
 import de.jost_net.JVerein.gui.input.BuchungsartInput;
 import de.jost_net.JVerein.gui.input.BuchungsartInput.buchungsarttyp;
 import de.jost_net.JVerein.gui.input.BuchungsklasseInput;
+import de.jost_net.JVerein.gui.parts.ProposalListTablePart;
 import de.jost_net.JVerein.rmi.Buchung;
 import de.jost_net.JVerein.rmi.Buchungsart;
 import de.jost_net.JVerein.rmi.Buchungsklasse;
@@ -37,7 +33,7 @@ import de.willuhn.logging.Logger;
 public class HistoryZuordnungDialog extends AbstractDialog<Proposal> {
 
   private final Buchung buchung;
-  private Table table;
+  private ProposalListTablePart proposalTablePart;
   private AbstractInput buchungsartInput;
   private SelectInput buchungsklasseInput;
   private SelectInput projektInput;
@@ -141,43 +137,6 @@ public class HistoryZuordnungDialog extends AbstractDialog<Proposal> {
       }
     } else {
       LabelGroup listGroup = new LabelGroup(parent, "Vorschläge aus der Historie (Doppelklick zum Auswählen)");
-      
-      table = new Table(listGroup.getComposite(), SWT.BORDER | SWT.FULL_SELECTION | SWT.SINGLE);
-      table.setHeaderVisible(true);
-      table.setLinesVisible(true);
-      GridData gd = new GridData(GridData.FILL_BOTH);
-      gd.heightHint = 120;
-      table.setLayoutData(gd);
-
-      TableColumn colDetails = new TableColumn(table, SWT.LEFT);
-      colDetails.setText("Buchungsart");
-      colDetails.setWidth(200);
-
-      TableColumn colKlasse = new TableColumn(table, SWT.LEFT);
-      colKlasse.setText("Buchungsklasse");
-      colKlasse.setWidth(120);
-
-      TableColumn colProj = new TableColumn(table, SWT.LEFT);
-      colProj.setText("Projekt");
-      colProj.setWidth(120);
-
-      TableColumn colScore = new TableColumn(table, SWT.RIGHT);
-      colScore.setText("Score");
-      colScore.setWidth(50);
-
-      TableColumn colReason = new TableColumn(table, SWT.LEFT);
-      colReason.setText("Grund");
-      colReason.setWidth(180);
-
-      for (Proposal p : proposals) {
-        TableItem item = new TableItem(table, SWT.NONE);
-        item.setData(p);
-        item.setText(0, p.getProposedBuchungsartLabel());
-        item.setText(1, p.getProposedBuchungsklasseLabel());
-        item.setText(2, p.getProposedProjektLabel());
-        item.setText(3, Math.round(p.getScore()) + "%");
-        item.setText(4, p.isSplit() ? "[Split] " + p.getReason() : p.getReason());
-      }
 
       LabelGroup examplesGroup = new LabelGroup(parent, "Bisherige Buchungen (Beispiele aus dem Verlauf)");
       org.eclipse.swt.widgets.Text examplesText = new org.eclipse.swt.widgets.Text(examplesGroup.getComposite(), SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.BORDER);
@@ -186,66 +145,11 @@ public class HistoryZuordnungDialog extends AbstractDialog<Proposal> {
       gdEx.heightHint = 60;
       examplesText.setLayoutData(gdEx);
 
-      table.addListener(SWT.Selection, event -> {
-        TableItem[] selection = table.getSelection();
-        if (selection.length > 0) {
-          Proposal p = (Proposal) selection[0].getData();
-          if (p != null) {
-            if (p.getExamples() != null && !p.getExamples().isEmpty()) {
-              examplesText.setText(String.join("\n", p.getExamples()));
-            } else {
-              examplesText.setText("Keine historischen Buchungen als Beispiel vorhanden.");
-            }
-            if (!p.isSplit()) {
-              buchungsartInput.setEnabled(true);
-              buchungsklasseInput.setEnabled(true);
-              projektInput.setEnabled(true);
-
-              try {
-                if (p.getBuchungsartId() != null) {
-                  Buchungsart ba = (Buchungsart) Einstellungen.getDBService()
-                      .createObject(Buchungsart.class, String.valueOf(p.getBuchungsartId()));
-                  buchungsartInput.setValue(ba);
-                } else {
-                  buchungsartInput.setValue(null);
-                }
-
-                if (p.getBuchungsklasseId() != null) {
-                  Buchungsklasse bk = (Buchungsklasse) Einstellungen.getDBService()
-                      .createObject(Buchungsklasse.class, String.valueOf(p.getBuchungsklasseId()));
-                  buchungsklasseInput.setValue(bk);
-                } else {
-                  buchungsklasseInput.setValue(null);
-                }
-
-                if (p.getProjektId() != null) {
-                  Projekt proj = (Projekt) Einstellungen.getDBService()
-                      .createObject(Projekt.class, String.valueOf(p.getProjektId()));
-                  projektInput.setValue(proj);
-                } else {
-                  projektInput.setValue(null);
-                }
-              } catch (Exception e) {
-                Logger.error("Fehler beim Laden des Vorschlags", e);
-              }
-            } else {
-              buchungsartInput.setValue(null);
-              buchungsklasseInput.setValue(null);
-              projektInput.setValue(null);
-              buchungsartInput.setEnabled(false);
-              buchungsklasseInput.setEnabled(false);
-              projektInput.setEnabled(false);
-            }
-          }
-        }
-      });
-
-      table.addMouseListener(new MouseAdapter() {
+      Action doubleClickAction = new Action() {
         @Override
-        public void mouseDoubleClick(MouseEvent e) {
-          TableItem[] selection = table.getSelection();
-          if (selection.length > 0) {
-            selectedProposal = (Proposal) selection[0].getData();
+        public void handleAction(Object context) {
+          if (context instanceof Proposal) {
+            selectedProposal = (Proposal) context;
             if (!selectedProposal.isSplit()) {
               try {
                 finalBuchungsart = (Buchungsart) buchungsartInput.getValue();
@@ -259,22 +163,76 @@ public class HistoryZuordnungDialog extends AbstractDialog<Proposal> {
             close();
           }
         }
+      };
+
+      proposalTablePart = new ProposalListTablePart(proposals, doubleClickAction);
+      proposalTablePart.addSelectionListener(e -> {
+        try {
+          Object sel = proposalTablePart.getSelection();
+          if (sel instanceof Proposal) {
+            Proposal p = (Proposal) sel;
+            if (p.getExamples() != null && !p.getExamples().isEmpty()) {
+              examplesText.setText(String.join("\n", p.getExamples()));
+            } else {
+              examplesText.setText("Keine historischen Buchungen als Beispiel vorhanden.");
+            }
+            if (!p.isSplit()) {
+              buchungsartInput.setEnabled(true);
+              buchungsklasseInput.setEnabled(true);
+              projektInput.setEnabled(true);
+
+              if (p.getBuchungsartId() != null) {
+                Buchungsart ba = (Buchungsart) Einstellungen.getDBService()
+                    .createObject(Buchungsart.class, String.valueOf(p.getBuchungsartId()));
+                buchungsartInput.setValue(ba);
+              } else {
+                buchungsartInput.setValue(null);
+              }
+
+              if (p.getBuchungsklasseId() != null) {
+                Buchungsklasse bk = (Buchungsklasse) Einstellungen.getDBService()
+                    .createObject(Buchungsklasse.class, String.valueOf(p.getBuchungsklasseId()));
+                buchungsklasseInput.setValue(bk);
+              } else {
+                buchungsklasseInput.setValue(null);
+              }
+
+              if (p.getProjektId() != null) {
+                Projekt proj = (Projekt) Einstellungen.getDBService()
+                    .createObject(Projekt.class, String.valueOf(p.getProjektId()));
+                projektInput.setValue(proj);
+              } else {
+                projektInput.setValue(null);
+              }
+            } else {
+              buchungsartInput.setValue(null);
+              buchungsklasseInput.setValue(null);
+              projektInput.setValue(null);
+              buchungsartInput.setEnabled(false);
+              buchungsklasseInput.setEnabled(false);
+              projektInput.setEnabled(false);
+            }
+          }
+        } catch (Exception ex) {
+          Logger.error("Fehler beim Auswählen des Vorschlags", ex);
+        }
       });
 
-      if (table.getItemCount() > 0) {
-        table.setSelection(0);
-        table.notifyListeners(SWT.Selection, new org.eclipse.swt.widgets.Event());
-      }
+      proposalTablePart.paint(listGroup.getComposite());
     }
 
     ButtonArea buttons = new ButtonArea();
     buttons.addButton("Übernehmen", new Action() {
       @Override
       public void handleAction(Object context) {
-        if (table != null) {
-          TableItem[] selection = table.getSelection();
-          if (selection.length > 0) {
-            selectedProposal = (Proposal) selection[0].getData();
+        if (proposalTablePart != null) {
+          try {
+            Object sel = proposalTablePart.getSelection();
+            if (sel instanceof Proposal) {
+              selectedProposal = (Proposal) sel;
+            }
+          } catch (Exception ex) {
+            Logger.error("Fehler beim Ermitteln der Auswahl", ex);
           }
         }
         if (selectedProposal == null || !selectedProposal.isSplit()) {

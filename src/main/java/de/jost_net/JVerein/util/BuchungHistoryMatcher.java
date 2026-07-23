@@ -103,8 +103,16 @@ public class BuchungHistoryMatcher {
       return score;
     }
 
+    public Double getFormattedScore() {
+      return score;
+    }
+
     public String getReason() {
       return reason;
+    }
+
+    public String getDisplayReason() {
+      return isSplit ? "[Split] " + reason : reason;
     }
 
     public boolean isSplit() {
