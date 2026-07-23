@@ -69,24 +69,28 @@ public class HistoryZuordnungDialog extends AbstractDialog<Proposal> {
     }
     editGroup.addLabelPair("Buchungsart", buchungsartInput);
 
-    // Buchungsklasse input
-    buchungsklasseInput = new BuchungsklasseInput().getBuchungsklasseInput(null, null);
-    if (buchungsklasseInput instanceof SelectInput) {
-      ((SelectInput) buchungsklasseInput).setPleaseChoose("Bitte auswählen");
+    // Buchungsklasse input (conditional)
+    if ((Boolean) Einstellungen.getEinstellung(Property.BUCHUNGSKLASSEINBUCHUNG)) {
+      buchungsklasseInput = new BuchungsklasseInput().getBuchungsklasseInput(null, null);
+      if (buchungsklasseInput instanceof SelectInput) {
+        ((SelectInput) buchungsklasseInput).setPleaseChoose("Bitte auswählen");
+      }
+      editGroup.addLabelPair("Buchungsklasse", buchungsklasseInput);
     }
-    editGroup.addLabelPair("Buchungsklasse", buchungsklasseInput);
 
-    // Projekt input
-    List<Projekt> projektList = new ArrayList<>();
-    DBIterator<Projekt> projIt = Einstellungen.getDBService().createList(Projekt.class);
-    projIt.setOrder("ORDER BY bezeichnung");
-    while (projIt.hasNext()) {
-      projektList.add(projIt.next());
+    // Projekt input (conditional)
+    if ((Boolean) Einstellungen.getEinstellung(Property.PROJEKTEANZEIGEN)) {
+      List<Projekt> projektList = new ArrayList<>();
+      DBIterator<Projekt> projIt = Einstellungen.getDBService().createList(Projekt.class);
+      projIt.setOrder("ORDER BY bezeichnung");
+      while (projIt.hasNext()) {
+        projektList.add(projIt.next());
+      }
+      projektInput = new SelectInput(projektList, null);
+      projektInput.setAttribute("bezeichnung");
+      projektInput.setPleaseChoose("Bitte auswählen");
+      editGroup.addLabelPair("Projekt", projektInput);
     }
-    projektInput = new SelectInput(projektList, null);
-    projektInput.setAttribute("bezeichnung");
-    projektInput.setPleaseChoose("Bitte auswählen");
-    editGroup.addLabelPair("Projekt", projektInput);
 
     List<Proposal> proposals = BuchungHistoryMatcher.getProposals(
         buchung.getName(),
@@ -189,28 +193,38 @@ public class HistoryZuordnungDialog extends AbstractDialog<Proposal> {
                 buchungsartInput.setValue(null);
               }
 
-              if (p.getBuchungsklasseId() != null) {
-                Buchungsklasse bk = (Buchungsklasse) Einstellungen.getDBService()
-                    .createObject(Buchungsklasse.class, String.valueOf(p.getBuchungsklasseId()));
-                buchungsklasseInput.setValue(bk);
-              } else {
-                buchungsklasseInput.setValue(null);
+              if (buchungsklasseInput != null) {
+                if (p.getBuchungsklasseId() != null) {
+                  Buchungsklasse bk = (Buchungsklasse) Einstellungen.getDBService()
+                      .createObject(Buchungsklasse.class, String.valueOf(p.getBuchungsklasseId()));
+                  buchungsklasseInput.setValue(bk);
+                } else {
+                  buchungsklasseInput.setValue(null);
+                }
               }
 
-              if (p.getProjektId() != null) {
-                Projekt proj = (Projekt) Einstellungen.getDBService()
-                    .createObject(Projekt.class, String.valueOf(p.getProjektId()));
-                projektInput.setValue(proj);
-              } else {
-                projektInput.setValue(null);
+              if (projektInput != null) {
+                if (p.getProjektId() != null) {
+                  Projekt proj = (Projekt) Einstellungen.getDBService()
+                      .createObject(Projekt.class, String.valueOf(p.getProjektId()));
+                  projektInput.setValue(proj);
+                } else {
+                  projektInput.setValue(null);
+                }
               }
             } else {
-              buchungsartInput.setValue(null);
-              buchungsklasseInput.setValue(null);
-              projektInput.setValue(null);
-              buchungsartInput.setEnabled(false);
-              buchungsklasseInput.setEnabled(false);
-              projektInput.setEnabled(false);
+              if (buchungsartInput != null) {
+                buchungsartInput.setValue(null);
+                buchungsartInput.setEnabled(false);
+              }
+              if (buchungsklasseInput != null) {
+                buchungsklasseInput.setValue(null);
+                buchungsklasseInput.setEnabled(false);
+              }
+              if (projektInput != null) {
+                projektInput.setValue(null);
+                projektInput.setEnabled(false);
+              }
             }
           }
         } catch (Exception ex) {
@@ -237,9 +251,15 @@ public class HistoryZuordnungDialog extends AbstractDialog<Proposal> {
         }
         if (selectedProposal == null || !selectedProposal.isSplit()) {
           try {
-            finalBuchungsart = (Buchungsart) buchungsartInput.getValue();
-            finalBuchungsklasse = (Buchungsklasse) buchungsklasseInput.getValue();
-            finalProjekt = (Projekt) projektInput.getValue();
+            if (buchungsartInput != null) {
+              finalBuchungsart = (Buchungsart) buchungsartInput.getValue();
+            }
+            if (buchungsklasseInput != null) {
+              finalBuchungsklasse = (Buchungsklasse) buchungsklasseInput.getValue();
+            }
+            if (projektInput != null) {
+              finalProjekt = (Projekt) projektInput.getValue();
+            }
           } catch (Exception ex) {
             Logger.error("Fehler beim Auslesen der Dialogwerte", ex);
           }

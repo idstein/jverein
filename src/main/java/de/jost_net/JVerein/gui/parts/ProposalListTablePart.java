@@ -13,8 +13,18 @@ public class ProposalListTablePart extends JVereinTablePart {
     super(list, action);
 
     addColumn(new Column("proposedBuchungsartLabel", "Buchungsart", null, false, Column.ALIGN_LEFT));
-    addColumn(new Column("proposedBuchungsklasseLabel", "Buchungsklasse", null, false, Column.ALIGN_LEFT));
-    addColumn(new Column("proposedProjektLabel", "Projekt", null, false, Column.ALIGN_LEFT));
+
+    try {
+      if ((Boolean) de.jost_net.JVerein.Einstellungen.getEinstellung(de.jost_net.JVerein.Einstellungen.Property.BUCHUNGSKLASSEINBUCHUNG)) {
+        addColumn(new Column("proposedBuchungsklasseLabel", "Buchungsklasse", null, false, Column.ALIGN_LEFT));
+      }
+      if ((Boolean) de.jost_net.JVerein.Einstellungen.getEinstellung(de.jost_net.JVerein.Einstellungen.Property.PROJEKTEANZEIGEN)) {
+        addColumn(new Column("proposedProjektLabel", "Projekt", null, false, Column.ALIGN_LEFT));
+      }
+    } catch (Exception e) {
+      de.willuhn.logging.Logger.error("Fehler beim Prüfen der Einstellungen in ProposalListTablePart", e);
+    }
+
     addColumn(new Column("formattedScore", "Score", new Formatter() {
       @Override
       public String format(Object val) {
