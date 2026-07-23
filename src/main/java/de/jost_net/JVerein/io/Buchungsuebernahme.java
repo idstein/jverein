@@ -240,7 +240,7 @@ public class Buchungsuebernahme
           }
         }
 
-        if (b.getBuchungsartId() == null)
+        if (b.getBuchungsartId() == null && (Boolean) Einstellungen.getEinstellung(Property.HISTORYMATCHINGIMPORT))
         {
           List<de.jost_net.JVerein.util.BuchungHistoryMatcher.Proposal> proposals = de.jost_net.JVerein.util.BuchungHistoryMatcher.getProposals(
               u.getGegenkontoName(),
@@ -251,14 +251,18 @@ public class Buchungsuebernahme
           if (!proposals.isEmpty())
           {
             de.jost_net.JVerein.util.BuchungHistoryMatcher.Proposal best = proposals.get(0);
-            b.setBuchungsartId(best.getBuchungsartId());
-            if (best.getBuchungsklasseId() != null)
+            double minScore = (Double) Einstellungen.getEinstellung(Property.HISTORYMATCHINGMINSCORE);
+            if (best.getScore() >= minScore)
             {
-              b.setBuchungsklasseId(best.getBuchungsklasseId());
-            }
-            if (best.getProjektId() != null)
-            {
-              b.setProjektID(best.getProjektId());
+              b.setBuchungsartId(best.getBuchungsartId());
+              if (best.getBuchungsklasseId() != null)
+              {
+                b.setBuchungsklasseId(best.getBuchungsklasseId());
+              }
+              if (best.getProjektId() != null)
+              {
+                b.setProjektID(best.getProjektId());
+              }
             }
           }
         }

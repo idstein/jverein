@@ -300,6 +300,8 @@ public class Einstellungen
     AUTOBUCHUNGUEBERNAHME("autobuchunguebernahme", Boolean.class, "1"),
     AUTOMATISCHEBUCHUNGSKORREKTURHIBISCUS("autobuchungskorrekturhibiscus",
         Boolean.class, "1"),
+    HISTORYMATCHINGIMPORT("historymatchingimport", Boolean.class, "1"),
+    HISTORYMATCHINGMINSCORE("historymatchingminscore", Double.class, "0.5"),
 
     KONTONUMMERINBUCHUNGSLISTE("kontonummer_in_buchungsliste", Boolean.class,
         "0"),

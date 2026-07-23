@@ -1293,6 +1293,15 @@ public class BuchungsControl extends VorZurueckControl implements Savable
     return b;
   }
 
+  public Button getStarteBuchungHistoryBulkZuordnungButton()
+  {
+    Button b = new Button("Auto-Klassifikation",
+        new de.jost_net.JVerein.gui.action.BuchungHistoryBulkZuordnungAction(getVondatum(),
+            getBisdatum()),
+        null, false, "magic.png");
+    return b;
+  }
+
   public Button getAfaButton()
   {
     Button b = new Button("Erzeuge Abschreibungen", new Action()

@@ -146,6 +146,8 @@ public class BuchungListeView extends AbstractView
         "emblem-documents.png");
     buttons.addButton(
         control.getStarteBuchungSollbuchungZuordnungAutomatischButton());
+    buttons.addButton(
+        control.getStarteBuchungHistoryBulkZuordnungButton());
     buttons.addButton("Import", new BuchungImportAction(), null, false,
         "file-import.png");
     buttons.addButton(new Button("Export", new BuchungExportAction(), control,
